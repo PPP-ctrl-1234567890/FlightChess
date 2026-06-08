@@ -1,0 +1,28 @@
+# .NET Build outputs
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+*.cache
+*.user
+*.suo
+
+# Visual Studio
+.vs/
+*.user
+*.vsidx
+*.dtbcache.v2
+*.futdcache.v2
+*.metadata.v9.bin
+*.projects.v9.bin
+DesignTimeBuild/
+ProjectEvaluation/
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Temp
+*.tmp
+*.log
