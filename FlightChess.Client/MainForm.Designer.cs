@@ -56,7 +56,7 @@ namespace FlightChess.Client
             this.topPanel.Controls.Add(this.btnReset);
             this.topPanel.Location = new System.Drawing.Point(10, 8);
             this.topPanel.Name = "topPanel";
-            this.topPanel.Size = new System.Drawing.Size(885, 44);
+            this.topPanel.Size = new System.Drawing.Size(700, 44);
             this.topPanel.TabIndex = 0;
             // 
             // lblCurrentPlayer
@@ -119,17 +119,17 @@ namespace FlightChess.Client
             this.lstLog.HorizontalScrollbar = true;
             this.lstLog.Location = new System.Drawing.Point(10, 765);
             this.lstLog.Name = "lstLog";
-            this.lstLog.Size = new System.Drawing.Size(885, 18);
+            this.lstLog.Size = new System.Drawing.Size(700, 18);
             this.lstLog.TabIndex = 2;
             // 
             // MainForm
             // 
             this.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(240)))), ((int)(((byte)(235)))), ((int)(((byte)(220)))));
-            this.ClientSize = new System.Drawing.Size(906, 790);
+            this.ClientSize = new System.Drawing.Size(720, 790);
             this.Controls.Add(this.topPanel);
             this.Controls.Add(this.boardPanel);
             this.Controls.Add(this.lstLog);
-            this.MinimumSize = new System.Drawing.Size(880, 780);
+            this.MinimumSize = new System.Drawing.Size(700, 780);
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "飞行棋联机游戏";
