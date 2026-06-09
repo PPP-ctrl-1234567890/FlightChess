@@ -554,6 +554,91 @@ namespace FlightChess.Server
         }
 
         /// <summary>
+        /// 调试命令：触发踩子炸裂动画 — 让 kicker 的棋子踩 kicked 的棋子
+        /// </summary>
+        public void ForceKick(int kickerIdx, int kickedIdx)
+        {
+            if (kickerIdx < 0 || kickerIdx > 3 || kickedIdx < 0 || kickedIdx > 3) return;
+            if (kickerIdx == kickedIdx)
+            {
+                Console.WriteLine("[调试] 踩子者和被踩者不能是同一人。");
+                return;
+            }
+
+            lock (_gameStateLock)
+            {
+                var kicker = _gameState.Players[kickerIdx];
+                var kicked = _gameState.Players[kickedIdx];
+
+                if (!kicker.IsConnected || !kicked.IsConnected)
+                {
+                    Console.WriteLine("[调试] 两名玩家都必须已连接。");
+                    return;
+                }
+
+                // 重置双方棋子到基地（简化场景）
+                for (int i = 0; i < 4; i++)
+                {
+                    kicker.Pieces[i] = -1;
+                    kicked.Pieces[i] = -1;
+                }
+
+                // 选一个非安全格作为踩子点（绝对格子 3，颜色类型=蓝）
+                const int targetAbs = 3;
+                int kickedLocal = (targetAbs - kicked.StartOffset + 52) % 52;
+                int kickerTargetLocal = (targetAbs - kicker.StartOffset + 52) % 52;
+
+                // 被踩者棋子放在目标格
+                kicked.Pieces[0] = kickedLocal;
+
+                int dice;
+                // 踩人者：从主路径上前几步出发，掷骰子恰好到达目标格
+                if (kickerTargetLocal >= 4)
+                {
+                    dice = 4;
+                    kicker.Pieces[0] = kickerTargetLocal - dice;
+                }
+                else if (kickerTargetLocal >= 1)
+                {
+                    dice = kickerTargetLocal;
+                    kicker.Pieces[0] = 0;
+                }
+                else
+                {
+                    // 目标就是起点格，从 START 出发
+                    dice = 1;
+                    kicker.Pieces[0] = FlightChessEngine.StartPosition;
+                }
+
+                // 确保骰子在有效范围内
+                if (dice < 1 || dice > 6)
+                {
+                    Console.WriteLine($"[调试] 计算出的骰子值({dice})无效，跳过。");
+                    return;
+                }
+
+                // 重置排名状态（避免被误判为游戏已结束）
+                for (int p = 0; p < 4; p++)
+                    _gameState.Players[p].Rank = 0;
+                _gameState.FinishCount = 0;
+                _gameState.CurrentPlayerIndex = kickerIdx;
+                _gameState.DiceValue = dice;
+
+                MoveResult result = _engine.MovePiece(_gameState, kickerIdx, 0);
+
+                string[] colorNames = { "红", "绿", "黄", "蓝" };
+                string logMsg = string.Format("[调试] {0}({1}方) 踩到 {2}({3}方)！{4}",
+                    kicker.Name, colorNames[kickerIdx],
+                    kicked.Name, colorNames[kickedIdx],
+                    result.Message);
+                AddLog(logMsg);
+                Console.WriteLine(logMsg);
+            }
+
+            BroadcastGameState();
+        }
+
+        /// <summary>
         /// 添加日志
         /// </summary>
         private void AddLog(string message)

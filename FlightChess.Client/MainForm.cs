@@ -41,7 +41,7 @@ namespace FlightChess.Client
         private const int ArmW = 180;                     // 十字臂宽度
         private const int CenterX = 310, CenterY = 310;   // 中心区块左上角（100×100，缩小为原来一半）
         private const int CenterW = 100, CenterH = 100;   // 中心区块宽高（臂210px=5.25格，边100px=2.5格）
-        private const int BaseSize = 160;                  // 大本营尺寸
+        private const int BaseSize = 140;                  // 大本营尺寸
         private const int BaseMargin = 30;                 // 大本营距边缘
 
         // ========== 棋盘数据 ==========
@@ -97,6 +97,10 @@ namespace FlightChess.Client
         private int _fireworkBurstsLeft;
         private Random _fireworkRng;
         private bool _victoryShown;  // 防止重复弹窗
+
+        // ========== 炸裂特效（踩子）==========
+        private List<FireworkParticle> _explosionParticles;
+        private bool _explosionActive;
 
         /// <summary>烟花粒子</summary>
         private class FireworkParticle
@@ -204,6 +208,7 @@ namespace FlightChess.Client
             _fireworkTimer.Interval = 33;  // ~30fps
             _fireworkTimer.Tick += FireworkTimer_Tick;
             _fireworkParticles = new List<FireworkParticle>();
+            _explosionParticles = new List<FireworkParticle>();
             _fireworkRng = new Random();
         }
 
@@ -310,18 +315,25 @@ namespace FlightChess.Client
             }
 
             // ---- 大本营（四角） ----
+            // 用内缘坐标（靠近棋盘中心一侧）定位大本营，BaseSize 只影响向外延伸的尺寸
+            // 这样缩小大本营时不会把内缘推离中心
+            const int BaseInnerRight  = 495;  // 右侧大本营左缘 X（红/绿）
+            const int BaseInnerBottom = 495;  // 下侧大本营上缘 Y（红/蓝）
+            const int BaseInnerLeft   = 205;  // 左侧大本营右缘 X（黄/蓝）
+            const int BaseInnerTop    = 205;  // 上侧大本营下缘 Y（绿/黄）
+
             _baseRects = new Rectangle[4];
-            _baseRects[0] = new Rectangle(BdW - BaseMargin - BaseSize, BdH - BaseMargin - BaseSize, BaseSize, BaseSize);  // 红 右下
-            _baseRects[1] = new Rectangle(BdW - BaseMargin - BaseSize, BaseMargin, BaseSize, BaseSize);                   // 绿 右上
-            _baseRects[2] = new Rectangle(BaseMargin, BaseMargin, BaseSize, BaseSize);                                    // 黄 左上
-            _baseRects[3] = new Rectangle(BaseMargin, BdH - BaseMargin - BaseSize, BaseSize, BaseSize);                   // 蓝 左下
+            _baseRects[0] = new Rectangle(BaseInnerRight, BaseInnerBottom + 20, BaseSize, BaseSize);                       // 红 右下（向下微调）
+            _baseRects[1] = new Rectangle(BaseInnerRight + 20, BaseInnerTop - BaseSize, BaseSize, BaseSize);               // 绿 右上（向右微调）
+            _baseRects[2] = new Rectangle(BaseInnerLeft - BaseSize, BaseInnerTop - BaseSize, BaseSize, BaseSize);          // 黄 左上
+            _baseRects[3] = new Rectangle(BaseInnerLeft - BaseSize, BaseInnerBottom, BaseSize, BaseSize);                  // 蓝 左下
 
             _baseSlots = new Point[4][];
             for (int p = 0; p < 4; p++)
             {
                 var r = _baseRects[p];
                 int bcx = r.X + r.Width / 2, bcy = r.Y + r.Height / 2;
-                int gap = 40;
+                int gap = 35;
                 _baseSlots[p] = new Point[] {
                     new Point(bcx - gap/2, bcy - gap/2),
                     new Point(bcx + gap/2, bcy - gap/2),
@@ -337,14 +349,14 @@ namespace FlightChess.Client
             _medalPositions[3] = new PointF(_baseRects[3].Right + 30, _baseRects[3].Y + 30); // 蓝 左下→右上角
 
             _startMarkers = new Point[4];
-            _startMarkers[0] = new Point(_baseRects[0].X + _baseRects[0].Width / 2 + 60,
-                                         _baseRects[0].Y - 20);
-            _startMarkers[1] = new Point(_baseRects[1].X - 20,
-                                         _baseRects[1].Y + _baseRects[1].Height / 2 - 50);
-            _startMarkers[2] = new Point(_baseRects[2].X + _baseRects[2].Width / 2 - 60,
-                                         _baseRects[2].Y + _baseRects[2].Height + 20);
-            _startMarkers[3] = new Point(_baseRects[3].X + _baseRects[3].Width + 20,
-                                         _baseRects[3].Y + _baseRects[3].Height / 2 + 50);
+            _startMarkers[0] = new Point(_baseRects[0].X + _baseRects[0].Width / 2 + 53,
+                                         _baseRects[0].Y - 18);
+            _startMarkers[1] = new Point(_baseRects[1].X - 18,
+                                         _baseRects[1].Y + _baseRects[1].Height / 2 - 44);
+            _startMarkers[2] = new Point(_baseRects[2].X + _baseRects[2].Width / 2 - 53,
+                                         _baseRects[2].Y + _baseRects[2].Height + 18);
+            _startMarkers[3] = new Point(_baseRects[3].X + _baseRects[3].Width + 18,
+                                         _baseRects[3].Y + _baseRects[3].Height / 2 + 44);
 
             // ---- 回营路径（6步，40px步长，向中心平移40px避开外环格子，第6格在缩小后中心三角形内） ----
             _returnPathSpots = new PointF[4][];
@@ -408,6 +420,7 @@ namespace FlightChess.Client
             DrawCenter(g);
             DrawAllPieces(g);
             DrawFireworks(g);      // 烟花特效
+            DrawExplosion(g);      // 踩子炸裂特效
             DrawPodium(g);         // 颁奖台（游戏结束时，最上层）
         }
 
@@ -487,9 +500,9 @@ namespace FlightChess.Client
                     g.FillRectangle(bg, r);
 
                 // 内部4个同色系圆形图案（2×2均匀排布）
-                int circleR = 16;
+                int circleR = 14;
                 int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
-                int gap = 38;
+                int gap = 33;
                 int[][] offsets = new int[][] {
                     new int[] { -gap/2, -gap/2 },
                     new int[] { gap/2, -gap/2 },
@@ -1225,6 +1238,8 @@ namespace FlightChess.Client
                         _kickedPlayer = pl;
                         _kickedPiece = qi;
                         _kickedScreenPos = GetScreenPosForPosition(oldState, pl, oldPos);
+                        // 在被踩位置触发炸裂动画
+                        SpawnExplosion(_kickedScreenPos.X, _kickedScreenPos.Y, PlyCol[pl]);
                         return;
                     }
                 }
@@ -1363,6 +1378,45 @@ namespace FlightChess.Client
             }
         }
 
+        /// <summary>在指定坐标生成踩子炸裂粒子</summary>
+        private void SpawnExplosion(float x, float y, Color kickerColor)
+        {
+            _explosionActive = true;
+            _explosionParticles.Clear();
+
+            Color[] burstColors = new Color[] {
+                kickerColor,
+                Color.FromArgb(255, 100, 30),   // 橙红
+                Color.FromArgb(255, 220, 50),   // 金黄
+                Color.FromArgb(255, 255, 240),  // 炽白
+                Color.FromArgb(255, 60, 20),    // 深红
+                Color.FromArgb(255, 180, 60),   // 橙黄
+            };
+
+            int particleCount = 25 + _fireworkRng.Next(20);  // 25~44 个粒子
+            for (int i = 0; i < particleCount; i++)
+            {
+                float angle = (float)(_fireworkRng.NextDouble() * Math.PI * 2);
+                float speed = 0.8f + (float)_fireworkRng.NextDouble() * 3.5f;
+                float life = 0.35f + (float)_fireworkRng.NextDouble() * 0.5f;
+                float size = 1.5f + (float)_fireworkRng.NextDouble() * 4.5f;
+
+                _explosionParticles.Add(new FireworkParticle
+                {
+                    X = x, Y = y,
+                    Vx = (float)Math.Cos(angle) * speed,
+                    Vy = (float)Math.Sin(angle) * speed,
+                    Color = burstColors[_fireworkRng.Next(burstColors.Length)],
+                    Life = life,
+                    Size = size
+                });
+            }
+
+            // 确保定时器在运行（复用烟花定时器驱动炸裂粒子）
+            if (!_fireworkTimer.Enabled)
+                _fireworkTimer.Start();
+        }
+
         /// <summary>烟花定时器更新（~30fps）</summary>
         private void FireworkTimer_Tick(object sender, EventArgs e)
         {
@@ -1389,8 +1443,27 @@ namespace FlightChess.Client
                 _fireworkBurstsLeft--;
             }
 
+            // 更新炸裂粒子
+            bool anyExplosionAlive = false;
+            foreach (var ep in _explosionParticles)
+            {
+                if (ep.Life <= 0) continue;
+                ep.Life -= 0.035f;
+                ep.X += ep.Vx;
+                ep.Y += ep.Vy;
+                ep.Vy += 0.06f;             // 重力（比烟花轻）
+                ep.Vx *= 0.97f;             // 空气阻力
+                ep.Size *= 0.99f;           // 粒子缩小
+                if (ep.Life > 0) anyExplosionAlive = true;
+            }
+            if (!anyExplosionAlive && _explosionActive)
+            {
+                _explosionActive = false;
+                _explosionParticles.Clear();
+            }
+
             // 所有粒子消亡后停止
-            if (!anyAlive && _fireworkBurstsLeft <= 0)
+            if (!anyAlive && _fireworkBurstsLeft <= 0 && !_explosionActive)
             {
                 _fireworkTimer.Stop();
                 _fireworksActive = false;
@@ -1422,6 +1495,33 @@ namespace FlightChess.Client
                     g.FillEllipse(glow, p.X - s * 2, p.Y - s * 2, s * 4, s * 4);
                 using (Brush core = new SolidBrush(c))
                     g.FillEllipse(core, p.X - s, p.Y - s, s * 2, s * 2);
+            }
+        }
+
+        /// <summary>绘制踩子炸裂粒子</summary>
+        private void DrawExplosion(Graphics g)
+        {
+            if (!_explosionActive) return;
+
+            foreach (var p in _explosionParticles)
+            {
+                if (p.Life <= 0) continue;
+
+                int alpha = (int)(255 * p.Life);
+                if (alpha > 255) alpha = 255;
+                if (alpha < 0) alpha = 0;
+
+                Color c = Color.FromArgb(alpha, p.Color);
+                float s = p.Size;
+                if (s < 0.3f) s = 0.3f;
+
+                // 爆炸粒子：外层光晕（扇形扩散感）+ 核心亮点
+                using (Brush glow = new SolidBrush(Color.FromArgb(alpha / 4, c)))
+                    g.FillEllipse(glow, p.X - s * 3, p.Y - s * 3, s * 6, s * 6);
+                using (Brush mid = new SolidBrush(Color.FromArgb(alpha / 2, c)))
+                    g.FillEllipse(mid, p.X - s * 1.5f, p.Y - s * 1.5f, s * 3, s * 3);
+                using (Brush core = new SolidBrush(c))
+                    g.FillEllipse(core, p.X - s * 0.6f, p.Y - s * 0.6f, s * 1.2f, s * 1.2f);
             }
         }
 
@@ -1873,6 +1973,8 @@ namespace FlightChess.Client
                 _fireworkTimer.Stop();
                 _fireworksActive = false;
                 _fireworkParticles.Clear();
+                _explosionActive = false;
+                _explosionParticles.Clear();
 
                 var cp = st.Players[st.CurrentPlayerIndex];
                 string extra = cp.Rank > 0

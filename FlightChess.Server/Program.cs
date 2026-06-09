@@ -45,29 +45,43 @@ namespace FlightChess.Server
                 {
                     Console.WriteLine("服务器正在运行，端口: {0}", port);
                 }
+                if (input != null && input.ToLower().StartsWith("kick"))
+                {
+                    // 用法: kick 0 1  或  kick red green（踩子者 被踩者）
+                    var parts = input.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 3)
+                    {
+                        int kicker = ParsePlayerIndex(parts[1]);
+                        int kicked = ParsePlayerIndex(parts[2]);
+                        if (kicker >= 0 && kicked >= 0)
+                        {
+                            server.ForceKick(kicker, kicked);
+                        }
+                        else
+                        {
+                            Console.WriteLine("用法: kick <kicker> <kicked>  如 kick red green 或 kick 0 1");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("用法: kick <kicker> <kicked>  如 kick red green 或 kick 0 1");
+                        Console.WriteLine("  kicker: 踩子方, kicked: 被踩方");
+                    }
+                }
                 if (input != null && input.ToLower().StartsWith("win"))
                 {
                     // 用法: win 0  或  win red
                     var parts = input.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                     if (parts.Length >= 2)
                     {
-                        int idx = -1;
-                        if (int.TryParse(parts[1], out idx) && idx >= 0 && idx <= 3)
+                        int idx = ParsePlayerIndex(parts[1]);
+                        if (idx >= 0)
                         {
                             server.ForceWin(idx);
                         }
                         else
                         {
-                            switch (parts[1].ToLower())
-                            {
-                                case "red": case "红": server.ForceWin(0); break;
-                                case "green": case "绿": server.ForceWin(1); break;
-                                case "yellow": case "黄": server.ForceWin(2); break;
-                                case "blue": case "蓝": server.ForceWin(3); break;
-                                default:
-                                    Console.WriteLine("用法: win <0-3>  或  win <red/green/yellow/blue>");
-                                    break;
-                            }
+                            Console.WriteLine("用法: win <0-3>  或  win <red/green/yellow/blue>");
                         }
                     }
                     else
@@ -79,6 +93,21 @@ namespace FlightChess.Server
 
             server.Stop();
             Console.WriteLine("服务器已关闭。");
+        }
+
+        /// <summary>解析玩家索引：0-3 数字 或 red/green/yellow/blue/红/绿/黄/蓝</summary>
+        private static int ParsePlayerIndex(string s)
+        {
+            if (int.TryParse(s, out int idx) && idx >= 0 && idx <= 3)
+                return idx;
+            switch (s.ToLower())
+            {
+                case "red": case "红": return 0;
+                case "green": case "绿": return 1;
+                case "yellow": case "黄": return 2;
+                case "blue": case "蓝": return 3;
+                default: return -1;
+            }
         }
     }
 }
