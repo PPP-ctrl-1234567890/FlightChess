@@ -238,6 +238,8 @@ namespace FlightChess.Server
                 return;
             }
 
+            bool noValidMoves = false;
+
             lock (_gameStateLock)
             {
                 if (_gameState.GameOver)
@@ -273,18 +275,31 @@ namespace FlightChess.Server
 
                 if (validMoves.Count == 0)
                 {
-                    // 无合法移动，切换到下一个玩家
+                    noValidMoves = true;
                     logMsg = string.Format("{0} 没有棋子可以移动，轮到下一家。",
                         _gameState.Players[sender.PlayerId].Name);
                     AddLog(logMsg);
                     Console.WriteLine("[游戏] " + logMsg);
-
-                    _gameState.CurrentPlayerIndex = _engine.GetNextPlayerIndex(_gameState);
-                    _gameState.DiceValue = 0;
                 }
             }
 
+            // 先广播骰子结果，确保客户端总能显示点数
             BroadcastGameState();
+
+            if (noValidMoves)
+            {
+                // 等待玩家看到骰子点数后，再切换玩家并清零骰子
+                Thread.Sleep(1500);
+
+                lock (_gameStateLock)
+                {
+                    _gameState.CurrentPlayerIndex = _engine.GetNextPlayerIndex(_gameState);
+                    _gameState.DiceValue = 0;
+                }
+
+                // 广播切换后的状态（下一家回合，骰子归零）
+                BroadcastGameState();
+            }
         }
 
         /// <summary>

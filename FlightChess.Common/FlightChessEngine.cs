@@ -69,6 +69,24 @@ namespace FlightChess.Common
         /// <summary>安全格（绝对格子索引），不会被踩</summary>
         public static readonly HashSet<int> SafeCells = new HashSet<int> { 0, 13, 26, 39, 50 };
 
+        /// <summary>
+        /// 主路径格子颜色序列：绿(1)→红(0)→蓝(3)→黄(2) 循环。
+        /// 与客户端 MainForm._cellColorType 保持一致。
+        /// </summary>
+        private static readonly int[] ColorSeq = { 1, 0, 3, 2 };
+
+        /// <summary>
+        /// 获取主路径上指定步数位置的格子颜色类型。
+        /// </summary>
+        /// <param name="position">棋子步数位置（0~51）</param>
+        /// <returns>颜色类型：0=红, 1=绿, 2=黄, 3=蓝</returns>
+        public static int GetCellColorType(int position)
+        {
+            if (position < 0 || position >= BoardSize)
+                return -1;
+            return ColorSeq[position % 4];
+        }
+
         private Random _random;
 
         public FlightChessEngine()
@@ -249,6 +267,13 @@ namespace FlightChess.Common
                 // 踩子检查
                 DoKickCheck(gameState, playerIndex, pieceIndex, result);
 
+                // 飞跃跳（优先于同色跳，仅当棋子仍在主路径上时触发）
+                if (!DoFlightJump(gameState, playerIndex, pieceIndex, result))
+                {
+                    // 同色跳（仅当飞跃跳未触发时检查）
+                    DoSameColorJump(gameState, playerIndex, pieceIndex, result);
+                }
+
                 // 胜利检查
                 DoWinCheck(gameState, playerIndex, result);
 
@@ -291,6 +316,13 @@ namespace FlightChess.Common
                 if (newPos < BoardSize)
                 {
                     DoKickCheck(gameState, playerIndex, pieceIndex, result);
+                }
+
+                // 飞跃跳（优先于同色跳，仅当棋子仍在主路径上时触发）
+                if (newPos < BoardSize && !DoFlightJump(gameState, playerIndex, pieceIndex, result))
+                {
+                    // 同色跳（仅当飞跃跳未触发时检查）
+                    DoSameColorJump(gameState, playerIndex, pieceIndex, result);
                 }
 
                 // 胜利检查
@@ -403,6 +435,69 @@ namespace FlightChess.Common
                 result.Message += string.Format(" {0} 获得胜利！", player.Name);
                 result.ExtraTurn = false;
             }
+        }
+
+        /// <summary>
+        /// 同色跳：如果棋子落在与自身颜色相同的主路径格子上，向前跳到下一个同色格（+4）。
+        /// 仅在主路径（0~51）上触发，可能跳入归营路径（52~55）。
+        /// </summary>
+        /// <returns>true 如果发生了跳跃</returns>
+        private bool DoSameColorJump(GameState gameState, int playerIndex, int pieceIndex, MoveResult result)
+        {
+            Player player = gameState.Players[playerIndex];
+            int pos = player.Pieces[pieceIndex];
+
+            if (pos < 0 || pos >= BoardSize)
+                return false;
+
+            // 使用绝对格子索引匹配棋盘上的实际颜色（而非相对玩家的步数位置）
+            int absIndex = ToAbsoluteIndex(player.StartOffset, pos);
+            if (GetCellColorType(absIndex) != playerIndex)
+                return false;
+
+            int jumpPos = pos + 4;
+
+            if (jumpPos >= BoardSize)
+            {
+                // 跳入归营路径（52~55）
+                player.Pieces[pieceIndex] = jumpPos;
+                result.Message += string.Format(" 落在同色格上，从 {0} 跳到归营路径 {1}！", pos, jumpPos);
+            }
+            else
+            {
+                // 仍在主路径
+                player.Pieces[pieceIndex] = jumpPos;
+                result.Message += string.Format(" 落在同色格上，从 {0} 跳到 {1}！", pos, jumpPos);
+                // 跳跃后踩子检查
+                DoKickCheck(gameState, playerIndex, pieceIndex, result);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 飞跃跳：当棋子走到本地位置 17 时，直接飞到 29（前进+12格）。
+        /// 四名玩家的触发条件在本地坐标系下完全一致（对称设计）。
+        /// 优先于同色跳触发。
+        /// </summary>
+        /// <returns>true 如果发生了飞跃</returns>
+        private bool DoFlightJump(GameState gameState, int playerIndex, int pieceIndex, MoveResult result)
+        {
+            Player player = gameState.Players[playerIndex];
+            int pos = player.Pieces[pieceIndex];
+
+            // 仅当棋子恰好在主路径本地位置 17 时触发
+            if (pos != 17)
+                return false;
+
+            int jumpPos = 29;
+            player.Pieces[pieceIndex] = jumpPos;
+            result.Message += string.Format(" 飞跃！从 {0} 飞到 {1}！", pos, jumpPos);
+
+            // 跳跃后踩子检查
+            DoKickCheck(gameState, playerIndex, pieceIndex, result);
+
+            return true;
         }
 
         /// <summary>
