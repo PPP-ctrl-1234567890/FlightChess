@@ -21,8 +21,11 @@ namespace FlightChess.Common
         /// <summary>获胜玩家索引（-1 表示尚无胜者）</summary>
         public int WinnerIndex { get; set; }
 
-        /// <summary>游戏是否已结束</summary>
-        public bool GameOver => WinnerIndex >= 0;
+        /// <summary>游戏是否已结束（所有已连接玩家均完成）</summary>
+        public bool GameOver => FinishCount >= ConnectedPlayerCount && ConnectedPlayerCount > 0;
+
+        /// <summary>已完成归营的玩家数量</summary>
+        public int FinishCount { get; set; }
 
         /// <summary>当前已连接玩家数量</summary>
         public int ConnectedPlayerCount { get; set; }
@@ -44,6 +47,7 @@ namespace FlightChess.Common
             CurrentPlayerIndex = 0;
             DiceValue = 0;
             WinnerIndex = -1;
+            FinishCount = 0;
             ConnectedPlayerCount = 0;
             LogMessages = new string[0];
         }
@@ -55,6 +59,7 @@ namespace FlightChess.Common
             copy.CurrentPlayerIndex = this.CurrentPlayerIndex;
             copy.DiceValue = this.DiceValue;
             copy.WinnerIndex = this.WinnerIndex;
+            copy.FinishCount = this.FinishCount;
             copy.ConnectedPlayerCount = this.ConnectedPlayerCount;
             for (int i = 0; i < 4; i++)
             {
@@ -62,6 +67,7 @@ namespace FlightChess.Common
                 copy.Players[i].Name = this.Players[i].Name;
                 copy.Players[i].StartOffset = this.Players[i].StartOffset;
                 copy.Players[i].IsConnected = this.Players[i].IsConnected;
+                copy.Players[i].Rank = this.Players[i].Rank;
                 for (int j = 0; j < 4; j++)
                 {
                     copy.Players[i].Pieces[j] = this.Players[i].Pieces[j];

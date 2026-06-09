@@ -172,6 +172,9 @@ namespace FlightChess.Server
                     case MessageType.MovePiece:
                         HandleMovePiece(sender, json);
                         break;
+                    case MessageType.ResetGame:
+                        HandleResetGame(sender);
+                        break;
                     default:
                         SendError(sender, "未知消息类型: " + msgType);
                         break;
@@ -361,8 +364,7 @@ namespace FlightChess.Server
                 // 处理后续
                 if (result.GameOver)
                 {
-                    AddLog(string.Format("游戏结束！{0} 获得胜利！",
-                        _gameState.Players[result.WinnerIndex].Name));
+                    AddLog("所有玩家均已完成归营，游戏结束！");
                     _gameState.DiceValue = 0;
                 }
                 else if (result.ExtraTurn)
@@ -380,6 +382,40 @@ namespace FlightChess.Server
                 }
             }
 
+            BroadcastGameState();
+        }
+
+        /// <summary>
+        /// 处理重新开始游戏请求 — 重置所有棋子，保留玩家连接
+        /// </summary>
+        private void HandleResetGame(ClientConnection sender)
+        {
+            lock (_gameStateLock)
+            {
+                if (!_gameState.GameOver)
+                {
+                    SendError(sender, "游戏尚未结束，无法重置。");
+                    return;
+                }
+
+                // 重置游戏状态
+                int[] offsets = new int[] { 0, 39, 26, 13 };
+                string[] colors = new string[] { "红", "绿", "黄", "蓝" };
+                for (int i = 0; i < 4; i++)
+                {
+                    bool wasConnected = _gameState.Players[i].IsConnected;
+                    string name = _gameState.Players[i].Name;
+                    _gameState.Players[i] = new Common.Player(i, name, offsets[i]);
+                    _gameState.Players[i].IsConnected = wasConnected;
+                }
+                _gameState.CurrentPlayerIndex = 0;
+                _gameState.DiceValue = 0;
+                _gameState.WinnerIndex = -1;
+                _gameState.FinishCount = 0;
+
+                AddLog("游戏已重置，新一局开始！");
+                Console.WriteLine("[游戏] 游戏已重置");
+            }
             BroadcastGameState();
         }
 
@@ -480,6 +516,41 @@ namespace FlightChess.Server
                     client.SendMessage(message);
                 }
             }
+        }
+
+        /// <summary>
+        /// 调试命令：强制指定玩家获胜，其他已连接玩家自动排名
+        /// </summary>
+        public void ForceWin(int playerIndex)
+        {
+            if (playerIndex < 0 || playerIndex > 3) return;
+            lock (_gameStateLock)
+            {
+                // 指定玩家全部归营，排名第一
+                for (int i = 0; i < 4; i++)
+                    _gameState.Players[playerIndex].Pieces[i] = FlightChessEngine.GoalPosition;
+                _gameState.Players[playerIndex].Rank = 1;
+                _gameState.FinishCount = 1;
+                _gameState.WinnerIndex = playerIndex;
+
+                // 其他已连接玩家自动分配后续排名
+                int nextRank = 2;
+                for (int p = 0; p < 4; p++)
+                {
+                    if (p == playerIndex || !_gameState.Players[p].IsConnected) continue;
+                    for (int i = 0; i < 4; i++)
+                        _gameState.Players[p].Pieces[i] = FlightChessEngine.GoalPosition;
+                    _gameState.Players[p].Rank = nextRank++;
+                    _gameState.FinishCount++;
+                }
+
+                _gameState.DiceValue = 0;
+                string logMsg = string.Format("[调试] {0} 获得第一名！（共{1}人完成）",
+                    _gameState.Players[playerIndex].Name, _gameState.FinishCount);
+                AddLog(logMsg);
+                Console.WriteLine(logMsg);
+            }
+            BroadcastGameState();
         }
 
         /// <summary>

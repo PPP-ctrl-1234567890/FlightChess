@@ -24,6 +24,9 @@ namespace FlightChess.Common
         /// <summary>是否仍然连接</summary>
         public bool IsConnected { get; set; }
 
+        /// <summary>排名：0=未完成，1=第一名，2=第二名，3=第三名，4=第四名</summary>
+        public int Rank { get; set; }
+
         /// <summary>棋盘路径起始偏移（绝对格子索引）</summary>
         public int StartOffset { get; set; }
 

@@ -45,6 +45,36 @@ namespace FlightChess.Server
                 {
                     Console.WriteLine("服务器正在运行，端口: {0}", port);
                 }
+                if (input != null && input.ToLower().StartsWith("win"))
+                {
+                    // 用法: win 0  或  win red
+                    var parts = input.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2)
+                    {
+                        int idx = -1;
+                        if (int.TryParse(parts[1], out idx) && idx >= 0 && idx <= 3)
+                        {
+                            server.ForceWin(idx);
+                        }
+                        else
+                        {
+                            switch (parts[1].ToLower())
+                            {
+                                case "red": case "红": server.ForceWin(0); break;
+                                case "green": case "绿": server.ForceWin(1); break;
+                                case "yellow": case "黄": server.ForceWin(2); break;
+                                case "blue": case "蓝": server.ForceWin(3); break;
+                                default:
+                                    Console.WriteLine("用法: win <0-3>  或  win <red/green/yellow/blue>");
+                                    break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("用法: win <0-3>  或  win <red/green/yellow/blue>");
+                    }
+                }
             }
 
             server.Stop();

@@ -14,6 +14,7 @@ namespace FlightChess.Common
         public const string Error = "Error";
         public const string PlayerLeft = "PlayerLeft";
         public const string JoinGameResponse = "JoinGameResponse";
+        public const string ResetGame = "ResetGame";
     }
 
     /// <summary>
@@ -118,6 +119,20 @@ namespace FlightChess.Common
         public JoinGameResponseMessage()
         {
             Type = MessageType.JoinGameResponse;
+        }
+    }
+
+    /// <summary>
+    /// 客户端 → 服务器：请求重新开始游戏
+    /// </summary>
+    [Serializable]
+    public class ResetGameMessage
+    {
+        public string Type { get; set; }
+
+        public ResetGameMessage()
+        {
+            Type = MessageType.ResetGame;
         }
     }
 }

@@ -126,6 +126,10 @@ namespace FlightChess.Common
         {
             List<int> validMoves = new List<int>();
 
+            // 已完成归营的玩家无需移动
+            if (player.Rank > 0)
+                return validMoves;
+
             if (diceValue <= 0 || diceValue > 6)
                 return validMoves;
 
@@ -275,7 +279,7 @@ namespace FlightChess.Common
                 }
 
                 // 胜利检查
-                DoWinCheck(gameState, playerIndex, result);
+                DoFinishCheck(gameState, playerIndex, result);
 
                 return result;
             }
@@ -326,7 +330,7 @@ namespace FlightChess.Common
                 }
 
                 // 胜利检查
-                DoWinCheck(gameState, playerIndex, result);
+                DoFinishCheck(gameState, playerIndex, result);
 
                 return result;
             }
@@ -374,7 +378,7 @@ namespace FlightChess.Common
                 // 归营路径无踩子
 
                 // 胜利检查
-                DoWinCheck(gameState, playerIndex, result);
+                DoFinishCheck(gameState, playerIndex, result);
 
                 return result;
             }
@@ -423,17 +427,29 @@ namespace FlightChess.Common
             }
         }
 
-        /// <summary>检查胜利条件</summary>
-        private void DoWinCheck(GameState gameState, int playerIndex, MoveResult result)
+        /// <summary>检查玩家是否完成归营（排名制：先完成者排名靠前）</summary>
+        private void DoFinishCheck(GameState gameState, int playerIndex, MoveResult result)
         {
             Player player = gameState.Players[playerIndex];
-            if (player.HasWon())
+            if (player.HasWon() && player.Rank == 0)
             {
-                result.GameOver = true;
-                result.WinnerIndex = playerIndex;
-                gameState.WinnerIndex = playerIndex;
-                result.Message += string.Format(" {0} 获得胜利！", player.Name);
-                result.ExtraTurn = false;
+                gameState.FinishCount++;
+                player.Rank = gameState.FinishCount;
+                gameState.WinnerIndex = playerIndex;  // 保持最后一个完成者为 WinnerIndex
+                result.ExtraTurn = false;  // 完成者无额外回合
+
+                string rankName = player.Rank == 1 ? "第一名" :
+                                  player.Rank == 2 ? "第二名" :
+                                  player.Rank == 3 ? "第三名" :
+                                  string.Format("第{0}名", player.Rank);
+                result.Message += string.Format(" {0} 获得{1}！", player.Name, rankName);
+
+                // 所有已连接玩家都完成时游戏结束
+                if (gameState.FinishCount >= gameState.ConnectedPlayerCount)
+                {
+                    result.GameOver = true;
+                    result.Message += " 游戏结束！";
+                }
             }
         }
 
@@ -509,7 +525,8 @@ namespace FlightChess.Common
             for (int i = 1; i <= count; i++)
             {
                 int next = (gameState.CurrentPlayerIndex + i) % count;
-                if (gameState.Players[next].IsConnected)
+                // 跳过已断开和已完成归营的玩家
+                if (gameState.Players[next].IsConnected && gameState.Players[next].Rank == 0)
                     return next;
             }
             return gameState.CurrentPlayerIndex; // 不应发生

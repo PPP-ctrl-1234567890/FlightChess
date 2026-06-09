@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
@@ -69,6 +70,8 @@ namespace FlightChess.Client
             (43, 3),   // 黄: abs 43 → 3
             (30, 42)   // 蓝: abs 30 → 42
         };
+        /// <summary>金银铜牌位置（每个大本营旁边）</summary>
+        private PointF[] _medalPositions;
         /// <summary>中心四色区块矩形</summary>
         private Rectangle _centerRect;
         private Point _centerPt;
@@ -86,6 +89,24 @@ namespace FlightChess.Client
         /// <summary>被踩棋子动画：在被踩回基地前短暂保留在棋盘原位</summary>
         private int _kickedPlayer = -1, _kickedPiece = -1;
         private PointF _kickedScreenPos;
+
+        // ========== 烟花特效 ==========
+        private System.Windows.Forms.Timer _fireworkTimer;
+        private List<FireworkParticle> _fireworkParticles;
+        private bool _fireworksActive;
+        private int _fireworkBurstsLeft;
+        private Random _fireworkRng;
+        private bool _victoryShown;  // 防止重复弹窗
+
+        /// <summary>烟花粒子</summary>
+        private class FireworkParticle
+        {
+            public float X, Y;
+            public float Vx, Vy;
+            public Color Color;
+            public float Life;    // 剩余生命 0~1（1=满，0=消亡）
+            public float Size;    // 粒子半径
+        }
 
         // P0=红(右下), P1=绿(右上), P2=黄(左上), P3=蓝(左下)
         private static readonly Color[] PlyCol = {
@@ -137,6 +158,7 @@ namespace FlightChess.Client
                     ?.SetValue(boardPanel, true, null);
             }
             InitAnimationTimer();
+            InitFireworkTimer();
             InitBoardGeometry();
         }
 
@@ -150,6 +172,7 @@ namespace FlightChess.Client
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
                 ?.SetValue(boardPanel, true, null);
             InitAnimationTimer();
+            InitFireworkTimer();
             InitBoardGeometry();
             ConnectToServer(server, port);
         }
@@ -172,6 +195,16 @@ namespace FlightChess.Client
             _animTimer = new System.Windows.Forms.Timer();
             _animTimer.Interval = 100;  // 每步 100ms
             _animTimer.Tick += AnimTimer_Tick;
+        }
+
+        /// <summary>初始化烟花特效计时器（30fps）</summary>
+        private void InitFireworkTimer()
+        {
+            _fireworkTimer = new System.Windows.Forms.Timer();
+            _fireworkTimer.Interval = 33;  // ~30fps
+            _fireworkTimer.Tick += FireworkTimer_Tick;
+            _fireworkParticles = new List<FireworkParticle>();
+            _fireworkRng = new Random();
         }
 
         // =================================================================
@@ -296,6 +329,13 @@ namespace FlightChess.Client
                     new Point(bcx + gap/2, bcy + gap/2) };
             }
 
+            // 勋章位置（大本营朝向棋盘中心一侧）
+            _medalPositions = new PointF[4];
+            _medalPositions[0] = new PointF(_baseRects[0].X - 30, _baseRects[0].Y + 30);   // 红 右下→左上角
+            _medalPositions[1] = new PointF(_baseRects[1].X + 30, _baseRects[1].Bottom + 20); // 绿 右上→左下角
+            _medalPositions[2] = new PointF(_baseRects[2].Right + 30, _baseRects[2].Bottom + 20); // 黄 左上→右下角
+            _medalPositions[3] = new PointF(_baseRects[3].Right + 30, _baseRects[3].Y + 30); // 蓝 左下→右上角
+
             _startMarkers = new Point[4];
             _startMarkers[0] = new Point(_baseRects[0].X + _baseRects[0].Width / 2 + 60,
                                          _baseRects[0].Y - 20);
@@ -367,6 +407,8 @@ namespace FlightChess.Client
             DrawReturnPaths(g);
             DrawCenter(g);
             DrawAllPieces(g);
+            DrawFireworks(g);      // 烟花特效
+            DrawPodium(g);         // 颁奖台（游戏结束时，最上层）
         }
 
         // ---- 整体棋盘底色：浅米黄色（复古纸质） ----
@@ -873,29 +915,32 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>绘制已归营棋子（金色光环 + 星标，区别于普通棋子）</summary>
+        /// <summary>绘制已归营棋子（棕色圆形 + 金色外圈 + 金色五角星填满圆形）</summary>
         private void DrawGoalPiece(Graphics g, int player, int idx, float x, float y)
         {
             float r = 11f;
-            Color main = PlyCol[player];
-            Color dark = PlyDark[player];
-            Color light = PlyLight[player];
 
-            // 金色外环（双环效果）
-            using (Pen goldOuter = new Pen(Color.FromArgb(220, 218, 165, 32), 3f))
-                g.DrawEllipse(goldOuter, x - r - 6, y - r - 6, (r + 6) * 2, (r + 6) * 2);
-            using (Pen goldInner = new Pen(Color.FromArgb(200, 255, 215, 0), 1.5f))
-                g.DrawEllipse(goldInner, x - r - 3, y - r - 3, (r + 3) * 2, (r + 3) * 2);
+            // 金色外圈（光环）
+            float ringOuterR = r + 3f;
+            float ringThickness = 2.5f;
+            using (Pen goldRing = new Pen(Color.FromArgb(240, 255, 215, 0), ringThickness))
+                g.DrawEllipse(goldRing, x - ringOuterR, y - ringOuterR, ringOuterR * 2, ringOuterR * 2);
 
-            // 平面飞机
-            DrawFlatAirplane(g, x, y, r, main, dark, light);
+            // 棕色圆形底色
+            Color brown = Color.FromArgb(220, 139, 90, 43);  // 棕色
+            using (Brush brownBg = new SolidBrush(brown))
+                g.FillEllipse(brownBg, x - r, y - r, r * 2, r * 2);
 
-            // 金色五角星（归营标志）
-            DrawGoldStar(g, x, y, r);
+            // 棕色圆形边框
+            using (Pen brownEdge = new Pen(Color.FromArgb(200, 110, 65, 30), 1.2f))
+                g.DrawEllipse(brownEdge, x - r, y - r, r * 2, r * 2);
+
+            // 金色五角星（占满圆形内部）
+            DrawGoldStarFilled(g, x, y, r);
 
             // 棋子小序号
             using (Font f = new Font("Arial", 6.5f, FontStyle.Bold))
-            using (Brush tb = new SolidBrush(Color.White))
+            using (Brush tb = new SolidBrush(Color.FromArgb(220, 80, 50, 20)))
             {
                 var sz = g.MeasureString((idx + 1).ToString(), f);
                 g.DrawString((idx + 1).ToString(), f, tb,
@@ -903,11 +948,12 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>绘制金色五角星（归营标记）</summary>
-        private void DrawGoldStar(Graphics g, float cx, float cy, float r)
+        /// <summary>绘制金色五角星（填满圆形，外顶点接触圆周边界）</summary>
+        private void DrawGoldStarFilled(Graphics g, float cx, float cy, float r)
         {
             int pts = 5;
-            float outerR = r * 0.45f, innerR = r * 0.2f;
+            float outerR = r * 0.92f;   // 外顶点接近圆周边界
+            float innerR = r * 0.38f;   // 内顶点比例（sin18°/sin54° ≈ 0.382）
             PointF[] star = new PointF[pts * 2];
             for (int i = 0; i < pts * 2; i++)
             {
@@ -916,9 +962,11 @@ namespace FlightChess.Client
                 star[i] = new PointF(cx + (float)Math.Cos(rad) * radius,
                                      cy + (float)Math.Sin(rad) * radius);
             }
-            using (Brush sb = new SolidBrush(Color.FromArgb(240, 255, 215, 0)))
+            // 金色填充
+            using (Brush sb = new SolidBrush(Color.FromArgb(250, 255, 215, 0)))
                 g.FillPolygon(sb, star);
-            using (Pen sp = new Pen(Color.FromArgb(200, 184, 134, 11), 0.8f))
+            // 深金色描边
+            using (Pen sp = new Pen(Color.FromArgb(200, 200, 150, 20), 0.8f))
                 g.DrawPolygon(sp, star);
         }
 
@@ -1262,6 +1310,403 @@ namespace FlightChess.Client
         }
 
         // =================================================================
+        //  烟花特效（胜利时播放）
+        // =================================================================
+        /// <summary>启动烟花特效</summary>
+        private void StartFireworks()
+        {
+            _fireworksActive = true;
+            _fireworkBurstsLeft = 8;  // 总共 8 波烟花
+            _fireworkParticles.Clear();
+            _fireworkTimer.Start();
+            // 立即生成第一波
+            SpawnFireworkBurst();
+        }
+
+        /// <summary>生成一波烟花粒子</summary>
+        private void SpawnFireworkBurst()
+        {
+            // 在棋盘中央区域随机位置爆发
+            float cx = 260 + (float)_fireworkRng.NextDouble() * 200;  // 260~460
+            float cy = 260 + (float)_fireworkRng.NextDouble() * 200;  // 260~460
+
+            // 胜利方颜色 + 金色 + 白色混合
+            Color[] burstColors = new Color[] {
+                Color.FromArgb(255, 215, 0),     // 金色
+                Color.FromArgb(255, 80, 80),     // 红
+                Color.FromArgb(80, 220, 80),     // 绿
+                Color.FromArgb(255, 220, 50),    // 黄
+                Color.FromArgb(70, 140, 255),    // 蓝
+                Color.FromArgb(255, 255, 255),   // 白
+                Color.FromArgb(255, 150, 50),    // 橙
+                Color.FromArgb(255, 100, 200),   // 粉
+            };
+
+            int particleCount = 40 + _fireworkRng.Next(30);  // 40~70 个粒子
+            for (int i = 0; i < particleCount; i++)
+            {
+                float angle = (float)(_fireworkRng.NextDouble() * Math.PI * 2);
+                float speed = 1.5f + (float)_fireworkRng.NextDouble() * 4f;  // 1.5~5.5
+                float life = 0.6f + (float)_fireworkRng.NextDouble() * 0.4f; // 0.6~1.0
+                float size = 2f + (float)_fireworkRng.NextDouble() * 3.5f;   // 2~5.5
+
+                _fireworkParticles.Add(new FireworkParticle
+                {
+                    X = cx,
+                    Y = cy,
+                    Vx = (float)Math.Cos(angle) * speed,
+                    Vy = (float)Math.Sin(angle) * speed,
+                    Color = burstColors[_fireworkRng.Next(burstColors.Length)],
+                    Life = life,
+                    Size = size
+                });
+            }
+        }
+
+        /// <summary>烟花定时器更新（~30fps）</summary>
+        private void FireworkTimer_Tick(object sender, EventArgs e)
+        {
+            bool anyAlive = false;
+
+            foreach (var p in _fireworkParticles)
+            {
+                if (p.Life <= 0) continue;
+                p.Life -= 0.025f;          // 生命衰减
+                p.X += p.Vx;
+                p.Y += p.Vy;
+                p.Vy += 0.08f;             // 重力
+                p.Vx *= 0.99f;             // 空气阻力
+                p.Size *= 0.995f;           // 粒子缩小
+                if (p.Life > 0) anyAlive = true;
+            }
+
+            // 定期生成新波次
+            int aliveCount = 0;
+            foreach (var fp in _fireworkParticles) { if (fp.Life > 0) aliveCount++; }
+            if (_fireworkBurstsLeft > 0 && aliveCount < 20)
+            {
+                SpawnFireworkBurst();
+                _fireworkBurstsLeft--;
+            }
+
+            // 所有粒子消亡后停止
+            if (!anyAlive && _fireworkBurstsLeft <= 0)
+            {
+                _fireworkTimer.Stop();
+                _fireworksActive = false;
+                _fireworkParticles.Clear();
+            }
+
+            boardPanel.Invalidate();
+        }
+
+        /// <summary>绘制烟花粒子</summary>
+        private void DrawFireworks(Graphics g)
+        {
+            if (!_fireworksActive) return;
+
+            foreach (var p in _fireworkParticles)
+            {
+                if (p.Life <= 0) continue;
+
+                int alpha = (int)(255 * p.Life);
+                if (alpha > 255) alpha = 255;
+                if (alpha < 0) alpha = 0;
+
+                Color c = Color.FromArgb(alpha, p.Color);
+                float s = p.Size;
+                if (s < 0.5f) s = 0.5f;
+
+                // 发光粒子（外层光晕 + 核心）
+                using (Brush glow = new SolidBrush(Color.FromArgb(alpha / 3, c)))
+                    g.FillEllipse(glow, p.X - s * 2, p.Y - s * 2, s * 4, s * 4);
+                using (Brush core = new SolidBrush(c))
+                    g.FillEllipse(core, p.X - s, p.Y - s, s * 2, s * 2);
+            }
+        }
+
+        // =================================================================
+        //  颁奖台绘制（游戏结束时，前三名领奖台）
+        // =================================================================
+        private void DrawPodium(Graphics g)
+        {
+            GameState st;
+            lock (_stateLock) { if (_currentGameState == null) return; st = _currentGameState.DeepCopy(); }
+            if (!st.GameOver) return;
+
+            // 深色半透明遮罩（蓝紫暗色）
+            using (Brush overlay = new SolidBrush(Color.FromArgb(195, 10, 12, 30)))
+                g.FillRectangle(overlay, 0, 0, BdW, BdH);
+
+            // 收集前三名（按排名排序）
+            var ranked = new List<(int playerIdx, int rank)>();
+            for (int p = 0; p < 4; p++)
+                if (st.Players[p].Rank > 0 && st.Players[p].Rank <= 3)
+                    ranked.Add((p, st.Players[p].Rank));
+            ranked.Sort((a, b) => a.rank.CompareTo(b.rank));
+
+            if (ranked.Count == 0) return;
+
+            // ── 颁奖台布局常数 ──
+            float boardCx = BdW / 2f;
+            float podiumBaseY = BdH / 2f + 170;   // 所有台座底部对齐于此（第一名台顶在y=350，分隔线在y=275）
+            float stepW = 170f;                    // 每个台座宽度
+            float gap = 45f;                       // 台座间距
+            float stepH1 = 170f, stepH2 = 140f, stepH3 = 115f;  // 三阶台高
+
+            // ── 顶部标题区域 ──
+            float titleAreaY = BdH / 2f - 205;
+
+            // 奖杯图标
+            DrawTrophyIcon(g, boardCx, titleAreaY + 28, 30f);
+
+            // 主标题
+            using (Font titleFont = new Font("微软雅黑", 26f, FontStyle.Bold))
+            using (Brush titleBrush = new SolidBrush(Color.FromArgb(250, 255, 225, 80)))
+            {
+                string title = "游 戏 结 束";
+                var sz = g.MeasureString(title, titleFont);
+                g.DrawString(title, titleFont, titleBrush,
+                    boardCx - sz.Width / 2, titleAreaY + 72);
+            }
+
+            // 装饰分隔线（金色渐变效果：一条粗线 + 两条细线）
+            float sepY = titleAreaY + 130;
+            using (Pen sepMain = new Pen(Color.FromArgb(140, 255, 215, 0), 2f))
+                g.DrawLine(sepMain, boardCx - 180, sepY, boardCx + 180, sepY);
+            using (Pen sepThin = new Pen(Color.FromArgb(80, 255, 215, 0), 0.5f))
+            {
+                g.DrawLine(sepThin, boardCx - 200, sepY - 6, boardCx + 200, sepY - 6);
+                g.DrawLine(sepThin, boardCx - 200, sepY + 6, boardCx + 200, sepY + 6);
+            }
+
+            // ── 台座 X 坐标 ──
+            float x1 = boardCx - stepW / 2;                           // 第一名：中间
+            float x2 = boardCx - stepW * 1.5f - gap;                  // 第二名：左边
+            float x3 = boardCx + stepW * 0.5f + gap;                  // 第三名：右边
+
+            // ── 先画所有台座（从低到高避免遮挡）──
+            for (int i = 0; i < ranked.Count && i < 3; i++)
+            {
+                var (playerIdx, rank) = ranked[i];
+                float px, ph;
+                switch (rank)
+                {
+                    case 1: px = x1; ph = stepH1; break;
+                    case 2: px = x2; ph = stepH2; break;
+                    default: px = x3; ph = stepH3; break;
+                }
+                float py = podiumBaseY - ph;
+                float cx = px + stepW / 2;
+
+                // 台座阴影
+                using (Brush shadow = new SolidBrush(Color.FromArgb(60, 0, 0, 0)))
+                    g.FillRectangle(shadow, px + 4, py + 4, stepW, ph);
+
+                // 台座颜色（带渐变感的双色竖条）
+                Color topColor, bottomColor, borderColor;
+                switch (rank)
+                {
+                    case 1:
+                        topColor = Color.FromArgb(235, 255, 220, 40);
+                        bottomColor = Color.FromArgb(235, 210, 160, 15);
+                        borderColor = Color.FromArgb(220, 200, 150, 20);
+                        break;
+                    case 2:
+                        topColor = Color.FromArgb(220, 215, 218, 225);
+                        bottomColor = Color.FromArgb(220, 170, 172, 180);
+                        borderColor = Color.FromArgb(200, 140, 142, 150);
+                        break;
+                    default:
+                        topColor = Color.FromArgb(220, 215, 150, 70);
+                        bottomColor = Color.FromArgb(220, 170, 110, 40);
+                        borderColor = Color.FromArgb(200, 140, 90, 30);
+                        break;
+                }
+
+                // 台座主体（顶部一半亮色）
+                using (Brush topBrush = new SolidBrush(topColor))
+                    g.FillRectangle(topBrush, px, py, stepW, ph * 0.45f);
+                // 下半部渐深
+                using (Brush botBrush = new SolidBrush(bottomColor))
+                    g.FillRectangle(botBrush, px, py + ph * 0.45f, stepW, ph * 0.55f);
+                // 整体覆盖一层柔和过渡
+                using (Brush blend = new SolidBrush(Color.FromArgb(40, topColor)))
+                    g.FillRectangle(blend, px, py, stepW, ph);
+
+                // 顶部高光边
+                using (Pen topEdge = new Pen(Color.FromArgb(220, 255, 255, 255), 2.5f))
+                    g.DrawLine(topEdge, px + 2, py, px + stepW - 2, py);
+                // 台座边框
+                using (Pen borderPen = new Pen(borderColor, 1.8f))
+                    g.DrawRectangle(borderPen, px, py, stepW, ph);
+
+                // 台座侧面竖线（透视感）
+                using (Pen sideLine = new Pen(Color.FromArgb(50, 255, 255, 255), 1f))
+                {
+                    g.DrawLine(sideLine, px + 6, py + 1, px + 6, py + ph);
+                    g.DrawLine(sideLine, px + stepW - 6, py + 1, px + stepW - 6, py + ph);
+                }
+            }
+
+            // ── 再画每个台座上的内容（奖牌、头像、名字、排名）──
+            for (int i = 0; i < ranked.Count && i < 3; i++)
+            {
+                var (playerIdx, rank) = ranked[i];
+                float px, ph;
+                switch (rank)
+                {
+                    case 1: px = x1; ph = stepH1; break;
+                    case 2: px = x2; ph = stepH2; break;
+                    default: px = x3; ph = stepH3; break;
+                }
+                float py = podiumBaseY - ph;       // 台座顶部 Y
+                float cx = px + stepW / 2;          // 台座水平中心
+
+                // ── ① 奖牌（台座正上方悬空）──
+                float medalR = 18f;
+                float medalY = py - medalR - 8;
+                Color medalColor;
+                switch (rank)
+                {
+                    case 1: medalColor = Color.FromArgb(255, 215, 0); break;   // 金
+                    case 2: medalColor = Color.FromArgb(195, 195, 205); break;  // 银
+                    default: medalColor = Color.FromArgb(210, 145, 60); break;   // 铜
+                }
+
+                // 奖牌光晕
+                using (Brush glow = new SolidBrush(Color.FromArgb(45, medalColor)))
+                    g.FillEllipse(glow, cx - medalR - 6, medalY - medalR - 6,
+                        (medalR + 6) * 2 + 2, (medalR + 6) * 2 + 2);
+                // 奖牌底色
+                using (Brush medBg = new SolidBrush(medalColor))
+                    g.FillEllipse(medBg, cx - medalR, medalY - medalR, medalR * 2, medalR * 2);
+                // 奖牌内环
+                using (Pen medInner = new Pen(Color.FromArgb(160, 255, 255, 255), 2f))
+                    g.DrawEllipse(medInner, cx - medalR + 3, medalY - medalR + 3,
+                        (medalR - 3) * 2, (medalR - 3) * 2);
+                // 奖牌外环
+                using (Pen medEdge = new Pen(Color.FromArgb(200, 255, 255, 255), 1.8f))
+                    g.DrawEllipse(medEdge, cx - medalR, medalY - medalR, medalR * 2, medalR * 2);
+                // 排名数字
+                using (Font medFont = new Font("Arial", 13f, FontStyle.Bold))
+                using (Brush medText = new SolidBrush(Color.White))
+                {
+                    string rankNum = rank.ToString();
+                    var msz = g.MeasureString(rankNum, medFont);
+                    g.DrawString(rankNum, medFont, medText,
+                        cx - msz.Width / 2, medalY - msz.Height / 2 + 1);
+                }
+
+                // ── ② 玩家颜色圆形头像 ──
+                float iconR = 20f;
+                float iconY = py + 42;
+                // 头像阴影
+                using (Brush iconShadow = new SolidBrush(Color.FromArgb(60, 0, 0, 0)))
+                    g.FillEllipse(iconShadow, cx - iconR + 1, iconY - iconR + 1, iconR * 2, iconR * 2);
+                // 头像主体
+                using (Brush iconBg = new SolidBrush(PlyCol[playerIdx]))
+                    g.FillEllipse(iconBg, cx - iconR, iconY - iconR, iconR * 2, iconR * 2);
+                // 头像白色边框
+                using (Pen iconEdge = new Pen(Color.White, 2.5f))
+                    g.DrawEllipse(iconEdge, cx - iconR, iconY - iconR, iconR * 2, iconR * 2);
+
+                // ── ③ 玩家名称 ──
+                string playerName = st.Players[playerIdx].Name;
+                float nameY = iconY + iconR + 10;
+                using (Font nameFont = new Font("微软雅黑", 12f, FontStyle.Bold))
+                using (Brush nameBrush = new SolidBrush(Color.FromArgb(245, 240, 240, 240)))
+                {
+                    var nsz = g.MeasureString(playerName, nameFont);
+                    // 如果名字过长，用更小字体
+                    Font actualFont = nameFont;
+                    if (nsz.Width > stepW - 16)
+                    {
+                        actualFont = new Font("微软雅黑", 10f, FontStyle.Bold);
+                        nsz = g.MeasureString(playerName, actualFont);
+                    }
+                    g.DrawString(playerName, actualFont, nameBrush,
+                        cx - nsz.Width / 2, nameY);
+                    if (actualFont != nameFont) actualFont.Dispose();
+                }
+
+                // ── ④ 排名标签（台座底部，带半透明底条）──
+                string rankLabel;
+                Color rankLabelColor;
+                switch (rank)
+                {
+                    case 1: rankLabel = "★ 第 一 名"; rankLabelColor = Color.FromArgb(250, 255, 225, 80); break;
+                    case 2: rankLabel = "★ 第 二 名"; rankLabelColor = Color.FromArgb(230, 210, 215, 225); break;
+                    default: rankLabel = "★ 第 三 名"; rankLabelColor = Color.FromArgb(240, 215, 165, 100); break;
+                }
+                float rankY = py + ph - 30;
+                // 排名底条
+                using (Brush rankBg = new SolidBrush(Color.FromArgb(70, 0, 0, 0)))
+                    g.FillRectangle(rankBg, px + 8, rankY - 2, stepW - 16, 24);
+                using (Font rankFont = new Font("微软雅黑", 13f, FontStyle.Bold))
+                using (Brush rankBrush = new SolidBrush(rankLabelColor))
+                {
+                    var rsz = g.MeasureString(rankLabel, rankFont);
+                    g.DrawString(rankLabel, rankFont, rankBrush,
+                        cx - rsz.Width / 2, rankY + 2);
+                }
+            }
+
+            // ── 底部提示 ──
+            float hintY = podiumBaseY + 30;
+            using (Font hintFont = new Font("微软雅黑", 10f, FontStyle.Regular))
+            using (Brush hintBrush = new SolidBrush(Color.FromArgb(190, 185, 185, 195)))
+            {
+                string hint = "— 点击「新游戏」按钮重新开始 —";
+                var hsz = g.MeasureString(hint, hintFont);
+                g.DrawString(hint, hintFont, hintBrush, boardCx - hsz.Width / 2, hintY);
+            }
+        }
+
+        /// <summary>绘制奖杯图标（加大版，金色倒梯形杯身 + 弧形杯耳 + 底座）</summary>
+        private void DrawTrophyIcon(Graphics g, float cx, float cy, float r)
+        {
+            // 杯身（倒梯形）
+            PointF[] cup = {
+                new PointF(cx - r * 0.45f, cy - r),
+                new PointF(cx + r * 0.45f, cy - r),
+                new PointF(cx + r * 0.75f, cy + r * 0.35f),
+                new PointF(cx - r * 0.75f, cy + r * 0.35f)
+            };
+            // 杯身填充（金色渐变：上亮下暗）
+            using (Brush cupFill = new SolidBrush(Color.FromArgb(250, 255, 225, 50)))
+                g.FillPolygon(cupFill, cup);
+            // 杯身高光（上半部分更亮）
+            using (Brush cupHighlight = new SolidBrush(Color.FromArgb(120, 255, 245, 150)))
+                g.FillPolygon(cupHighlight, new PointF[] {
+                    new PointF(cx - r * 0.38f, cy - r),
+                    new PointF(cx + r * 0.38f, cy - r),
+                    new PointF(cx + r * 0.65f, cy + r * 0.05f),
+                    new PointF(cx - r * 0.65f, cy + r * 0.05f)
+                });
+            // 杯身边框
+            using (Pen cupEdge = new Pen(Color.FromArgb(220, 200, 160, 20), 2.2f))
+                g.DrawPolygon(cupEdge, cup);
+
+            // 杯耳（左右弧形，稍粗）
+            using (Pen earPen = new Pen(Color.FromArgb(245, 255, 220, 30), 3.5f))
+            {
+                g.DrawArc(earPen, cx - r * 0.95f, cy - r * 0.55f, r * 0.65f, r * 1.05f, 270, 120);
+                g.DrawArc(earPen, cx + r * 0.30f, cy - r * 0.55f, r * 0.65f, r * 1.05f, 150, 120);
+            }
+
+            // 底座
+            using (Brush baseFill = new SolidBrush(Color.FromArgb(235, 210, 160, 25)))
+                g.FillRectangle(baseFill, cx - r * 0.72f, cy + r * 0.35f, r * 1.44f, r * 0.28f);
+            using (Pen baseEdge = new Pen(Color.FromArgb(200, 190, 140, 15), 1.5f))
+                g.DrawRectangle(baseEdge, cx - r * 0.72f, cy + r * 0.35f, r * 1.44f, r * 0.28f);
+
+            // 杯顶横条
+            using (Pen topBar = new Pen(Color.FromArgb(230, 255, 225, 60), 2.5f))
+                g.DrawLine(topBar, cx - r * 0.55f, cy - r, cx + r * 0.55f, cy - r);
+        }
+
+        // =================================================================
         //  网络通信（维持原有逻辑不变）
         // =================================================================
         private void ConnectToServer(string addr, int port)
@@ -1403,17 +1848,38 @@ namespace FlightChess.Client
         {
             if (st.GameOver)
             {
-                lblCurrentPlayer.Text = string.Format("{0}({1}方) 获胜！",
-                    st.Players[st.WinnerIndex].Name, PlyName[st.WinnerIndex]);
-                lblCurrentPlayer.ForeColor = PlyCol[st.WinnerIndex];
+                // 显示第一名
+                string firstPlace = "";
+                for (int i = 0; i < 4; i++)
+                    if (st.Players[i].Rank == 1) { firstPlace = PlyName[i]; break; }
+                lblCurrentPlayer.Text = string.Format("游戏结束！{0}方冠军", firstPlace);
+                lblCurrentPlayer.ForeColor = Color.FromArgb(255, 215, 0);
                 btnRollDice.Enabled = false;
                 btnRollDice.Text = "游戏结束";
+                btnReset.Text = "新游戏";
+                btnReset.Enabled = true;
+                btnReset.BackColor = Color.FromArgb(180, 255, 180);
+
+                // 烟花特效（仅触发一次）
+                if (!_victoryShown)
+                {
+                    _victoryShown = true;
+                    StartFireworks();
+                }
             }
             else
             {
+                _victoryShown = false;
+                _fireworkTimer.Stop();
+                _fireworksActive = false;
+                _fireworkParticles.Clear();
+
                 var cp = st.Players[st.CurrentPlayerIndex];
-                lblCurrentPlayer.Text = string.Format("当前: {0}({1}方)",
-                    cp.Name, PlyName[st.CurrentPlayerIndex]);
+                string extra = cp.Rank > 0
+                    ? string.Format(" (第{0}名已归营)", cp.Rank)
+                    : "";
+                lblCurrentPlayer.Text = string.Format("当前: {0}({1}方){2}",
+                    cp.Name, PlyName[st.CurrentPlayerIndex], extra);
                 lblCurrentPlayer.ForeColor = PlyCol[st.CurrentPlayerIndex];
             }
             lblDiceValue.Text = st.DiceValue > 0 ? string.Format("{0} 点", st.DiceValue) : "骰子: -";
@@ -1433,12 +1899,14 @@ namespace FlightChess.Client
                     btnRollDice.BackColor = Color.FromArgb(255, 255, 200);
                 }
                 btnReset.Enabled = true;
+                btnReset.Text = "重置";
             }
             else if (!st.GameOver)
             {
                 btnRollDice.Enabled = false;
                 btnRollDice.Text = "等待他人...";
                 btnReset.Enabled = true;
+                btnReset.Text = "重置";
             }
 
             if (st.LogMessages != null)
@@ -1459,11 +1927,22 @@ namespace FlightChess.Client
 
         private void BtnReset_Click(object s, EventArgs e)
         {
-            if (MessageBox.Show("重置需重启客户端。", "确认",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            GameState st;
+            lock (_stateLock) { st = _currentGameState; }
+            if (st != null && st.GameOver)
             {
-                HandleDisconnect();
-                MessageBox.Show("请重启客户端。");
+                // 游戏结束：发送重新开始请求
+                SendMessage(new ResetGameMessage());
+                Log("请求重新开始游戏...");
+            }
+            else
+            {
+                if (MessageBox.Show("重置需重启客户端。", "确认",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                {
+                    HandleDisconnect();
+                    MessageBox.Show("请重启客户端。");
+                }
             }
         }
 
