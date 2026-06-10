@@ -21,6 +21,9 @@ namespace FlightChess.Common
         /// </summary>
         public int[] Pieces { get; set; }
 
+        /// <summary>是否曾经加入过游戏（区分"从未加入"和"掉线"）</summary>
+        public bool HasJoined { get; set; }
+
         /// <summary>是否仍然连接</summary>
         public bool IsConnected { get; set; }
 

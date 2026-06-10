@@ -33,12 +33,17 @@ namespace FlightChess.Server
         /// <summary>游戏引擎</summary>
         private FlightChessEngine _engine;
 
+        // ========== AI 托管 ==========
+        private System.Timers.Timer _aiTimer;
+        private Random _aiRng;
+
         public GameServer()
         {
             _clients = new List<ClientConnection>();
             _engine = new FlightChessEngine();
             _logMessages = new List<string>();
             _gameState = new GameState();
+            _aiRng = new Random();
         }
 
         /// <summary>
@@ -66,6 +71,7 @@ namespace FlightChess.Server
         public void Stop()
         {
             _isRunning = false;
+            StopAI();
             try { _listener?.Stop(); } catch { }
 
             lock (_clientsLock)
@@ -212,6 +218,7 @@ namespace FlightChess.Server
                 var player = _gameState.Players[sender.PlayerId];
                 player.Name = playerName;
                 player.IsConnected = true;
+                player.HasJoined = true;
                 _gameState.ConnectedPlayerCount++;
                 sender.IsInitialized = true;
             }
@@ -302,6 +309,7 @@ namespace FlightChess.Server
 
                 // 广播切换后的状态（下一家回合，骰子归零）
                 BroadcastGameState();
+                CheckAndTriggerAI();  // 检查下一位玩家是否需要 AI 托管
             }
         }
 
@@ -383,6 +391,7 @@ namespace FlightChess.Server
             }
 
             BroadcastGameState();
+            CheckAndTriggerAI();  // 检查下一位玩家是否需要 AI 托管
         }
 
         /// <summary>
@@ -417,6 +426,7 @@ namespace FlightChess.Server
                 Console.WriteLine("[游戏] 游戏已重置");
             }
             BroadcastGameState();
+            CheckAndTriggerAI();  // 重置后检查首玩家是否需要 AI
         }
 
         /// <summary>
@@ -439,7 +449,7 @@ namespace FlightChess.Server
                     var player = _gameState.Players[client.PlayerId];
                     playerName = player.Name;
                     player.IsConnected = false;
-                    _gameState.ConnectedPlayerCount--;
+                    // ConnectedPlayerCount 不减少 — 保持加入玩家总数，AI 可继续为其游戏
 
                     // 如果离开的是当前玩家，切换到下一个
                     if (_gameState.CurrentPlayerIndex == client.PlayerId && !_gameState.GameOver)
@@ -450,9 +460,9 @@ namespace FlightChess.Server
                 }
             }
 
-            string logMsg = string.Format("{0} 离开了游戏。", playerName);
+            string logMsg = string.Format("{0} 离开了游戏，AI 将自动托管。", playerName);
             AddLog(logMsg);
-            Console.WriteLine("[离开] {0} (ID: {1})", playerName, playerIndex);
+            Console.WriteLine("[离开] {0} (ID: {1})，AI 托管中", playerName, playerIndex);
 
             // 广播玩家离开消息
             PlayerLeftMessage leftMsg = new PlayerLeftMessage
@@ -463,6 +473,7 @@ namespace FlightChess.Server
 
             BroadcastMessage(leftMsg);
             BroadcastGameState();
+            CheckAndTriggerAI();  // 检查当前玩家是否需要 AI 托管
 
             client.Stop();
         }
@@ -636,6 +647,146 @@ namespace FlightChess.Server
             }
 
             BroadcastGameState();
+        }
+
+        // =================================================================
+        //  AI 托管：断线玩家自动掷骰 + 随机移动
+        // =================================================================
+
+        /// <summary>检查当前玩家是否需要 AI 托管，如果是则启动延迟定时器</summary>
+        private void CheckAndTriggerAI()
+        {
+            bool needsAI = false;
+            lock (_gameStateLock)
+            {
+                if (!_gameState.GameOver)
+                {
+                    var cp = _gameState.Players[_gameState.CurrentPlayerIndex];
+                    if (!cp.IsConnected && cp.Rank == 0)
+                        needsAI = true;
+                }
+            }
+
+            if (needsAI)
+            {
+                if (_aiTimer == null)
+                {
+                    _aiTimer = new System.Timers.Timer(1200);  // 1.2 秒思考延迟
+                    _aiTimer.AutoReset = false;                // 单次触发
+                    _aiTimer.Elapsed += OnAITimerElapsed;
+                }
+                _aiTimer.Stop();
+                _aiTimer.Start();
+            }
+        }
+
+        /// <summary>AI 定时器回调：执行一次掷骰或移动操作</summary>
+        private void OnAITimerElapsed(object sender, System.Timers.ElapsedEventArgs e)
+        {
+            try
+            {
+            bool shouldBroadcast = false;
+            bool shouldContinue = false;
+
+            lock (_gameStateLock)
+            {
+                if (_gameState.GameOver)
+                    return;
+
+                var player = _gameState.Players[_gameState.CurrentPlayerIndex];
+
+                // 玩家已重连或已归营 → 停止托管
+                if (player.IsConnected || player.Rank > 0)
+                    return;
+
+                if (_gameState.DiceValue == 0)
+                {
+                    // === 阶段 1：掷骰子 ===
+                    int dice = _engine.RollDice();
+                    _gameState.DiceValue = dice;
+
+                    string logMsg = string.Format("[AI] {0} 掷出了 {1} 点。", player.Name, dice);
+                    AddLog(logMsg);
+                    Console.WriteLine("[AI] " + logMsg);
+
+                    var validMoves = _engine.GetValidMoves(player, dice);
+
+                    if (validMoves.Count == 0)
+                    {
+                        // 无可移动棋子 → 直接跳过
+                        string skipMsg = string.Format("[AI] {0} 没有棋子可以移动，轮到下一家。", player.Name);
+                        AddLog(skipMsg);
+                        Console.WriteLine("[AI] " + skipMsg);
+
+                        _gameState.CurrentPlayerIndex = _engine.GetNextPlayerIndex(_gameState);
+                        _gameState.DiceValue = 0;
+                        shouldContinue = true;
+                    }
+                    else
+                    {
+                        // 有合法移动 → 等待下一次定时器触发来执行移动
+                        shouldContinue = true;
+                    }
+
+                    shouldBroadcast = true;
+                }
+                else
+                {
+                    // === 阶段 2：随机选择合法移动 ===
+                    var validMoves = _engine.GetValidMoves(player, _gameState.DiceValue);
+                    if (validMoves.Count > 0)
+                    {
+                        int pieceIdx = validMoves[_aiRng.Next(validMoves.Count)];
+                        MoveResult result = _engine.MovePiece(_gameState, _gameState.CurrentPlayerIndex, pieceIdx);
+
+                        string logMsg = string.Format("[AI] {0} 移动棋子 {1}：{2}",
+                            player.Name, pieceIdx + 1, result.Message);
+                        AddLog(logMsg);
+                        Console.WriteLine("[AI] " + logMsg);
+
+                        if (result.GameOver)
+                        {
+                            AddLog("所有玩家均已完成归营，游戏结束！");
+                            _gameState.DiceValue = 0;
+                        }
+                        else if (result.ExtraTurn)
+                        {
+                            // 掷出 6：同一位玩家继续，重置骰子
+                            AddLog(string.Format("[AI] {0} 掷出了 6 点，额外回合！", player.Name));
+                            _gameState.DiceValue = 0;
+                            shouldContinue = true;
+                        }
+                        else
+                        {
+                            // 正常切换到下一家
+                            _gameState.CurrentPlayerIndex = _engine.GetNextPlayerIndex(_gameState);
+                            _gameState.DiceValue = 0;
+                            shouldContinue = true;
+                        }
+                    }
+
+                    shouldBroadcast = true;
+                }
+            }
+
+            if (shouldBroadcast)
+                BroadcastGameState();
+
+            // 如果还需要继续（下一家也是 AI 或本家额外回合），重新触发
+            if (shouldContinue)
+                CheckAndTriggerAI();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[AI错误] {0}", ex.Message);
+                try { CheckAndTriggerAI(); } catch { }  // 尝试恢复
+            }
+        }
+
+        /// <summary>停止 AI 托管定时器</summary>
+        private void StopAI()
+        {
+            try { _aiTimer?.Stop(); } catch { }
         }
 
         /// <summary>

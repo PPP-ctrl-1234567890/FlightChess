@@ -252,6 +252,12 @@ namespace FlightChess.Common
                 // 若恰好到达 FinishEnd=57，直接完成
                 if (newPos == FinishEnd)
                 {
+                    // 逐格检查途径的主路径格子（0 ~ 51）
+                    for (int pos = 0; pos < BoardSize; pos++)
+                    {
+                        int absIdx = ToAbsoluteIndex(player.StartOffset, pos);
+                        DoKickCheckAt(gameState, playerIndex, absIdx, result);
+                    }
                     player.Pieces[pieceIndex] = GoalPosition;
                     result.Success = true;
                     result.Message = string.Format("{0} 的棋子 {1} 从START起飞并直接到达终点！",
@@ -259,6 +265,12 @@ namespace FlightChess.Common
                 }
                 else
                 {
+                    // 逐格检查途径的主路径格子（0 ~ newPos）
+                    for (int pos = 0; pos <= newPos && pos < BoardSize; pos++)
+                    {
+                        int absIdx = ToAbsoluteIndex(player.StartOffset, pos);
+                        DoKickCheckAt(gameState, playerIndex, absIdx, result);
+                    }
                     player.Pieces[pieceIndex] = newPos;
                     result.Success = true;
                     result.Message = string.Format("{0} 的棋子 {1} 从START进入主路径位置 {2}。",
@@ -267,9 +279,6 @@ namespace FlightChess.Common
 
                 if (diceValue == 6)
                     result.ExtraTurn = true;
-
-                // 踩子检查
-                DoKickCheck(gameState, playerIndex, pieceIndex, result);
 
                 // 飞跃跳（优先于同色跳，仅当棋子仍在主路径上时触发）
                 if (!DoFlightJump(gameState, playerIndex, pieceIndex, result))
@@ -287,6 +296,7 @@ namespace FlightChess.Common
             // ===== 在主路径上（0~51）=====
             if (currentPos >= 0 && currentPos < BoardSize)
             {
+                int oldPos = currentPos;
                 int newPos = currentPos + diceValue;
 
                 if (newPos > FinishEnd)
@@ -299,6 +309,12 @@ namespace FlightChess.Common
                 // 恰好到达 FinishEnd=57：直接完成
                 if (newPos == FinishEnd)
                 {
+                    // 逐格检查途径的主路径格子（oldPos+1 ~ 51）
+                    for (int pos = oldPos + 1; pos < BoardSize; pos++)
+                    {
+                        int absIdx = ToAbsoluteIndex(player.StartOffset, pos);
+                        DoKickCheckAt(gameState, playerIndex, absIdx, result);
+                    }
                     player.Pieces[pieceIndex] = GoalPosition;
                     result.Success = true;
                     result.Message = string.Format("{0} 的棋子 {1} 从 {2} 移动到终点！",
@@ -306,6 +322,13 @@ namespace FlightChess.Common
                 }
                 else
                 {
+                    // 逐格检查途径的主路径格子（oldPos+1 ~ newPos）
+                    int endCheck = newPos < BoardSize ? newPos : BoardSize - 1;
+                    for (int pos = oldPos + 1; pos <= endCheck; pos++)
+                    {
+                        int absIdx = ToAbsoluteIndex(player.StartOffset, pos);
+                        DoKickCheckAt(gameState, playerIndex, absIdx, result);
+                    }
                     player.Pieces[pieceIndex] = newPos;
                     result.Success = true;
                     result.Message = string.Format("{0} 的棋子 {1} 从 {2} 移动到 {3}。",
@@ -315,12 +338,6 @@ namespace FlightChess.Common
                 // 掷出 6 点获得额外回合
                 if (diceValue == 6)
                     result.ExtraTurn = true;
-
-                // 踩子检查（仅当在主路径上时）
-                if (newPos < BoardSize)
-                {
-                    DoKickCheck(gameState, playerIndex, pieceIndex, result);
-                }
 
                 // 飞跃跳（优先于同色跳，仅当棋子仍在主路径上时触发）
                 if (newPos < BoardSize && !DoFlightJump(gameState, playerIndex, pieceIndex, result))
@@ -416,6 +433,35 @@ namespace FlightChess.Common
 
                     int otherAbsIndex = ToAbsoluteIndex(other.StartOffset, otherPos);
                     if (otherAbsIndex == movingAbsIndex)
+                    {
+                        // 踩到！送回基地
+                        other.Pieces[q] = -1;
+                        result.KickedPieces.Add(new Tuple<int, int>(p, q));
+                        result.Message += string.Format(" 踩到了 {0} 的棋子 {1}，将其送回基地！",
+                            other.Name, q + 1);
+                    }
+                }
+            }
+        }
+
+        /// <summary>在指定绝对格子索引上执行踩子检查（用于逐格检查中间路径）</summary>
+        private void DoKickCheckAt(GameState gameState, int playerIndex, int absIndex, MoveResult result)
+        {
+            if (SafeCells.Contains(absIndex))
+                return;
+
+            for (int p = 0; p < 4; p++)
+            {
+                if (p == playerIndex) continue;
+
+                Player other = gameState.Players[p];
+                for (int q = 0; q < 4; q++)
+                {
+                    int otherPos = other.Pieces[q];
+                    if (otherPos < 0 || otherPos >= BoardSize) continue;
+
+                    int otherAbsIndex = ToAbsoluteIndex(other.StartOffset, otherPos);
+                    if (otherAbsIndex == absIndex)
                     {
                         // 踩到！送回基地
                         other.Pieces[q] = -1;
@@ -525,8 +571,8 @@ namespace FlightChess.Common
             for (int i = 1; i <= count; i++)
             {
                 int next = (gameState.CurrentPlayerIndex + i) % count;
-                // 跳过已断开和已完成归营的玩家
-                if (gameState.Players[next].IsConnected && gameState.Players[next].Rank == 0)
+                // 跳过从未加入和已完成归营的玩家（掉线玩家 AI 托管，不跳过）
+                if (gameState.Players[next].HasJoined && gameState.Players[next].Rank == 0)
                     return next;
             }
             return gameState.CurrentPlayerIndex; // 不应发生

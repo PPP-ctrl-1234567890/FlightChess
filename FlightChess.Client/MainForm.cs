@@ -758,7 +758,7 @@ namespace FlightChess.Client
 
             for (int pl = 0; pl < 4; pl++)
             {
-                if (!st.Players[pl].IsConnected) continue;
+                if (!st.Players[pl].HasJoined) continue;
                 for (int qi = 0; qi < 4; qi++)
                 {
                     int pos = st.Players[pl].Pieces[qi];
@@ -790,8 +790,7 @@ namespace FlightChess.Client
             // 走完全程的棋子回到大本营，以归营棋子的样式显示
             for (int pl = 0; pl < 4; pl++)
             {
-                if (!st.Players[pl].IsConnected) continue;
-
+                if (!st.Players[pl].HasJoined) continue;
                 // 收集棋子：先基地后归营，保证基地棋子填充前面的槽位
                 var basePieces = new System.Collections.Generic.List<int>();
                 var goalPieces = new System.Collections.Generic.List<int>();
@@ -833,7 +832,7 @@ namespace FlightChess.Client
             // 绘START位置棋子（起飞后等待进入主路径）
             for (int pl = 0; pl < 4; pl++)
             {
-                if (!st.Players[pl].IsConnected) continue;
+                if (!st.Players[pl].HasJoined) continue;
                 for (int qi = 0; qi < 4; qi++)
                 {
                     int pos = st.Players[pl].Pieces[qi];
@@ -849,7 +848,7 @@ namespace FlightChess.Client
             // 绘回营路径棋子（52~57）
             for (int pl = 0; pl < 4; pl++)
             {
-                if (!st.Players[pl].IsConnected) continue;
+                if (!st.Players[pl].HasJoined) continue;
                 for (int qi = 0; qi < 4; qi++)
                 {
                     int pos = st.Players[pl].Pieces[qi];
@@ -1079,7 +1078,7 @@ namespace FlightChess.Client
             (int p, int q)? best = null; float bestD = 18f;
             for (int pl = 0; pl < 4; pl++)
             {
-                if (!st.Players[pl].IsConnected) continue;
+                if (!st.Players[pl].HasJoined) continue;
                 for (int qi = 0; qi < 4; qi++)
                 {
                     var sc = PieceScreenPos(st, pl, qi);
@@ -1107,7 +1106,7 @@ namespace FlightChess.Client
             float bestD = 18f; (int p, int q) best = (-1, -1);
             for (int pl = 0; pl < 4; pl++)
             {
-                if (!st.Players[pl].IsConnected) continue;
+                if (!st.Players[pl].HasJoined) continue;
                 for (int qi = 0; qi < 4; qi++)
                 {
                     var sc = PieceScreenPos(st, pl, qi);
@@ -1227,7 +1226,7 @@ namespace FlightChess.Client
             _kickedPiece = -1;
             for (int pl = 0; pl < 4; pl++)
             {
-                if (!newState.Players[pl].IsConnected) continue;
+                if (!newState.Players[pl].HasJoined) continue;
                 for (int qi = 0; qi < 4; qi++)
                 {
                     int oldPos = oldState.Players[pl].Pieces[qi];
@@ -1260,7 +1259,7 @@ namespace FlightChess.Client
 
             for (int pl = 0; pl < 4; pl++)
             {
-                if (!newState.Players[pl].IsConnected) continue;
+                if (!newState.Players[pl].HasJoined) continue;
                 for (int qi = 0; qi < 4; qi++)
                 {
                     int oldPos = oldState.Players[pl].Pieces[qi];
@@ -1987,7 +1986,9 @@ namespace FlightChess.Client
         private void HandlePL(string json)
         {
             var m = JsonConvert.DeserializeObject<PlayerLeftMessage>(json);
-            Log("{0} 离开了。", m.PlayerName);
+            string msg = string.Format("【{0}】掉线了！\nAI 将自动托管该玩家，游戏继续。", m.PlayerName);
+            Log(msg);
+            MessageBox.Show(msg, "玩家掉线", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void HandleDisconnect()

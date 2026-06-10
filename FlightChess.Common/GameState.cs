@@ -43,6 +43,7 @@ namespace FlightChess.Common
             {
                 Players[i] = new Player(i, colors[i], offsets[i]);
                 Players[i].IsConnected = false; // 初始无人连接
+                Players[i].HasJoined = false;   // 初始无玩家加入
             }
             CurrentPlayerIndex = 0;
             DiceValue = 0;
@@ -67,6 +68,7 @@ namespace FlightChess.Common
                 copy.Players[i].Name = this.Players[i].Name;
                 copy.Players[i].StartOffset = this.Players[i].StartOffset;
                 copy.Players[i].IsConnected = this.Players[i].IsConnected;
+                copy.Players[i].HasJoined = this.Players[i].HasJoined;
                 copy.Players[i].Rank = this.Players[i].Rank;
                 for (int j = 0; j < 4; j++)
                 {
