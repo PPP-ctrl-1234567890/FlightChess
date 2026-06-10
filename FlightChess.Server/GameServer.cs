@@ -181,6 +181,9 @@ namespace FlightChess.Server
                     case MessageType.ResetGame:
                         HandleResetGame(sender);
                         break;
+                    case MessageType.Chat:
+                        HandleChatMessage(sender, json);
+                        break;
                     default:
                         SendError(sender, "未知消息类型: " + msgType);
                         break;
@@ -235,6 +238,7 @@ namespace FlightChess.Server
             sender.SendMessage(response);
 
             BroadcastGameState();
+            CheckAndTriggerAI();  // 如果当前回合是断线玩家，恢复 AI 托管
         }
 
         /// <summary>
@@ -427,6 +431,30 @@ namespace FlightChess.Server
             }
             BroadcastGameState();
             CheckAndTriggerAI();  // 重置后检查首玩家是否需要 AI
+        }
+
+        /// <summary>
+        /// 处理聊天消息 — 直接广播给所有客户端
+        /// </summary>
+        private void HandleChatMessage(ClientConnection sender, string json)
+        {
+            ChatMessage msg = JsonConvert.DeserializeObject<ChatMessage>(json);
+            if (msg == null || string.IsNullOrWhiteSpace(msg.Content))
+                return;
+
+            // 用发送者连接中的玩家名覆盖（防止客户端伪造）
+            lock (_gameStateLock)
+            {
+                if (sender.PlayerId >= 0 && sender.PlayerId < 4)
+                    msg.SenderName = _gameState.Players[sender.PlayerId].Name;
+            }
+
+            string logMsg = string.Format("[聊天] {0}: {1}", msg.SenderName, msg.Content);
+            AddLog(logMsg);
+            Console.WriteLine(logMsg);
+
+            // 广播给所有已初始化的客户端（包括发送者）
+            BroadcastMessage(msg);
         }
 
         /// <summary>
@@ -653,9 +681,31 @@ namespace FlightChess.Server
         //  AI 托管：断线玩家自动掷骰 + 随机移动
         // =================================================================
 
+        /// <summary>检查是否还有任何人类玩家保持连接</summary>
+        private bool HasAnyConnectedPlayer()
+        {
+            lock (_gameStateLock)
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    if (_gameState.Players[i].IsConnected)
+                        return true;
+                }
+            }
+            return false;
+        }
+
         /// <summary>检查当前玩家是否需要 AI 托管，如果是则启动延迟定时器</summary>
         private void CheckAndTriggerAI()
         {
+            // 如果没有玩家在线，停止 AI 托管，等待玩家重连
+            if (!HasAnyConnectedPlayer())
+            {
+                StopAI();
+                Console.WriteLine("[AI] 所有玩家已离开，暂停 AI 托管，等待玩家重连...");
+                return;
+            }
+
             bool needsAI = false;
             lock (_gameStateLock)
             {
@@ -685,6 +735,14 @@ namespace FlightChess.Server
         {
             try
             {
+            // 安全检查：如果所有玩家都已离开，不再执行 AI 操作
+            if (!HasAnyConnectedPlayer())
+            {
+                StopAI();
+                Console.WriteLine("[AI] 所有玩家已离开，停止 AI 操作。");
+                return;
+            }
+
             bool shouldBroadcast = false;
             bool shouldContinue = false;
 

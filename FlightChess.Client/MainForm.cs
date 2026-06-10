@@ -164,6 +164,7 @@ namespace FlightChess.Client
             InitAnimationTimer();
             InitFireworkTimer();
             InitBoardGeometry();
+            InitChatPanel();
         }
 
         public MainForm(string server, int port, string name)
@@ -178,6 +179,7 @@ namespace FlightChess.Client
             InitAnimationTimer();
             InitFireworkTimer();
             InitBoardGeometry();
+            InitChatPanel();
             ConnectToServer(server, port);
         }
 
@@ -1932,6 +1934,7 @@ namespace FlightChess.Client
                             case MessageType.JoinGameResponse: HandleJR(json); break;
                             case MessageType.Error: HandleErr(json); break;
                             case MessageType.PlayerLeft: HandlePL(json); break;
+                            case MessageType.Chat: HandleChat(json); break;
                         }
                     }
                     catch (Exception ex)
@@ -1989,6 +1992,110 @@ namespace FlightChess.Client
             string msg = string.Format("【{0}】掉线了！\nAI 将自动托管该玩家，游戏继续。", m.PlayerName);
             Log(msg);
             MessageBox.Show(msg, "玩家掉线", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void HandleChat(string json)
+        {
+            var m = JsonConvert.DeserializeObject<ChatMessage>(json);
+            if (m == null || string.IsNullOrWhiteSpace(m.Content)) return;
+
+            string timestamp = DateTime.Now.ToString("HH:mm:ss");
+            string line = string.Format("[{0}] {1}: {2}", timestamp, m.SenderName, m.Content);
+
+            // 在聊天区域追加文本
+            if (rtbChat.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => AppendChatLine(line)));
+            }
+            else
+            {
+                AppendChatLine(line);
+            }
+        }
+
+        /// <summary>在聊天 RichTextBox 末尾追加一行并自动滚动到底部</summary>
+        private void AppendChatLine(string line)
+        {
+            if (rtbChat.IsDisposed) return;
+
+            // 限制聊天记录条数（保留最近 200 行）
+            if (rtbChat.Lines.Length > 200)
+            {
+                rtbChat.Select(0, rtbChat.GetFirstCharIndexFromLine(rtbChat.Lines.Length - 200));
+                rtbChat.SelectedText = "";
+            }
+
+            rtbChat.AppendText(line + Environment.NewLine);
+            // 自动滚动到底部
+            rtbChat.SelectionStart = rtbChat.TextLength;
+            rtbChat.ScrollToCaret();
+        }
+
+        /// <summary>发送聊天消息到服务器</summary>
+        private void SendChatMessage(string content)
+        {
+            if (!_isConnected)
+            {
+                Log("未连接到服务器，无法发送聊天。");
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(content)) return;
+
+            SendMessage(new ChatMessage
+            {
+                SenderName = _myPlayerName,
+                Content = content
+            });
+        }
+
+        /// <summary>初始化聊天面板的快捷短语按钮</summary>
+        private void InitChatPanel()
+        {
+            // 快捷短语列表
+            string[] phrases = new string[]
+            {
+                "加油！💪",
+                "好厉害！👏",
+                "被踩了，哭😭",
+                "起飞啦✈️",
+                "胜利在望🏆",
+                "运气真好🍀",
+                "再来一局🎲",
+                "哈哈😄",
+                "不好意思😅",
+                "厉害厉害🔥",
+            };
+
+            foreach (string phrase in phrases)
+            {
+                Button btn = new Button
+                {
+                    Text = phrase,
+                    Size = new System.Drawing.Size(180, 30),
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = System.Drawing.Color.FromArgb(235, 230, 215),
+                    Font = new System.Drawing.Font("微软雅黑", 9F),
+                    Cursor = System.Windows.Forms.Cursors.Hand,
+                    Margin = new Padding(2),
+                    TextAlign = System.Drawing.ContentAlignment.MiddleLeft,
+                };
+                btn.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(180, 170, 150);
+                btn.Click += (sender, e) =>
+                {
+                    SendChatMessage(phrase);
+                };
+                // 悬停效果
+                btn.MouseEnter += (sender, e) =>
+                {
+                    btn.BackColor = System.Drawing.Color.FromArgb(220, 240, 255);
+                };
+                btn.MouseLeave += (sender, e) =>
+                {
+                    btn.BackColor = System.Drawing.Color.FromArgb(235, 230, 215);
+                };
+
+                flpChatButtons.Controls.Add(btn);
+            }
         }
 
         private void HandleDisconnect()

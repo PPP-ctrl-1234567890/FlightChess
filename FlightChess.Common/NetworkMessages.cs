@@ -15,6 +15,7 @@ namespace FlightChess.Common
         public const string PlayerLeft = "PlayerLeft";
         public const string JoinGameResponse = "JoinGameResponse";
         public const string ResetGame = "ResetGame";
+        public const string Chat = "Chat";
     }
 
     /// <summary>
@@ -133,6 +134,24 @@ namespace FlightChess.Common
         public ResetGameMessage()
         {
             Type = MessageType.ResetGame;
+        }
+    }
+
+    /// <summary>
+    /// 客户端 ↔ 服务器：聊天消息（服务器广播给所有客户端）
+    /// </summary>
+    [Serializable]
+    public class ChatMessage
+    {
+        public string Type { get; set; }
+        /// <summary>发送者名称</summary>
+        public string SenderName { get; set; }
+        /// <summary>聊天内容（文本或 Emoji）</summary>
+        public string Content { get; set; }
+
+        public ChatMessage()
+        {
+            Type = MessageType.Chat;
         }
     }
 }
