@@ -69,6 +69,12 @@ namespace FlightChess.Common
         /// <summary>安全格（绝对格子索引），不会被踩</summary>
         public static readonly HashSet<int> SafeCells = new HashSet<int> { 0, 13, 26, 39, 50 };
 
+        /// <summary>四名玩家的起始偏移（红、绿、黄、蓝，逆时针顺序）</summary>
+        public static readonly int[] PlayerStartOffsets = { 0, 39, 26, 13 };
+
+        /// <summary>四名玩家的颜色名称（红、绿、黄、蓝）</summary>
+        public static readonly string[] PlayerColorNames = { "红", "绿", "黄", "蓝" };
+
         /// <summary>
         /// 主路径格子颜色序列：绿(1)→红(0)→蓝(3)→黄(2) 循环。
         /// 与客户端 MainForm._cellColorType 保持一致。
@@ -277,19 +283,8 @@ namespace FlightChess.Common
                         player.Name, pieceIndex + 1, newPos);
                 }
 
-                if (diceValue == 6)
-                    result.ExtraTurn = true;
-
-                // 飞跃跳（优先于同色跳，仅当棋子仍在主路径上时触发）
-                if (!DoFlightJump(gameState, playerIndex, pieceIndex, result))
-                {
-                    // 同色跳（仅当飞跃跳未触发时检查）
-                    DoSameColorJump(gameState, playerIndex, pieceIndex, result);
-                }
-
-                // 胜利检查
-                DoFinishCheck(gameState, playerIndex, result);
-
+                ApplyPostMoveEffects(gameState, playerIndex, pieceIndex, diceValue,
+                    newPos < BoardSize, result);
                 return result;
             }
 
@@ -335,20 +330,8 @@ namespace FlightChess.Common
                         player.Name, pieceIndex + 1, currentPos, newPos);
                 }
 
-                // 掷出 6 点获得额外回合
-                if (diceValue == 6)
-                    result.ExtraTurn = true;
-
-                // 飞跃跳（优先于同色跳，仅当棋子仍在主路径上时触发）
-                if (newPos < BoardSize && !DoFlightJump(gameState, playerIndex, pieceIndex, result))
-                {
-                    // 同色跳（仅当飞跃跳未触发时检查）
-                    DoSameColorJump(gameState, playerIndex, pieceIndex, result);
-                }
-
-                // 胜利检查
-                DoFinishCheck(gameState, playerIndex, result);
-
+                ApplyPostMoveEffects(gameState, playerIndex, pieceIndex, diceValue,
+                    newPos < BoardSize, result);
                 return result;
             }
 
@@ -388,15 +371,8 @@ namespace FlightChess.Common
                         player.Name, pieceIndex + 1, currentPos, newPos);
                 }
 
-                // 掷出 6 点获得额外回合
-                if (diceValue == 6)
-                    result.ExtraTurn = true;
-
-                // 归营路径无踩子
-
-                // 胜利检查
-                DoFinishCheck(gameState, playerIndex, result);
-
+                ApplyPostMoveEffects(gameState, playerIndex, pieceIndex, diceValue,
+                    false, result);
                 return result;
             }
 
@@ -416,32 +392,7 @@ namespace FlightChess.Common
                 return;
 
             int movingAbsIndex = ToAbsoluteIndex(player.StartOffset, movingPos);
-
-            // 安全格不会被踩
-            if (SafeCells.Contains(movingAbsIndex))
-                return;
-
-            for (int p = 0; p < 4; p++)
-            {
-                if (p == playerIndex) continue;
-
-                Player other = gameState.Players[p];
-                for (int q = 0; q < 4; q++)
-                {
-                    int otherPos = other.Pieces[q];
-                    if (otherPos < 0 || otherPos >= BoardSize) continue;
-
-                    int otherAbsIndex = ToAbsoluteIndex(other.StartOffset, otherPos);
-                    if (otherAbsIndex == movingAbsIndex)
-                    {
-                        // 踩到！送回基地
-                        other.Pieces[q] = -1;
-                        result.KickedPieces.Add(new Tuple<int, int>(p, q));
-                        result.Message += string.Format(" 踩到了 {0} 的棋子 {1}，将其送回基地！",
-                            other.Name, q + 1);
-                    }
-                }
-            }
+            DoKickCheckAt(gameState, playerIndex, movingAbsIndex, result);
         }
 
         /// <summary>在指定绝对格子索引上执行踩子检查（用于逐格检查中间路径）</summary>
@@ -497,6 +448,21 @@ namespace FlightChess.Common
                     result.Message += " 游戏结束！";
                 }
             }
+        }
+
+        /// <summary>
+        /// 统一处理移动后的骰子6额外回合、飞跃/同色跳、完成检查。
+        /// </summary>
+        private void ApplyPostMoveEffects(GameState gameState, int playerIndex, int pieceIndex,
+            int diceValue, bool isOnMainPath, MoveResult result)
+        {
+            if (diceValue == 6)
+                result.ExtraTurn = true;
+
+            if (isOnMainPath && !DoFlightJump(gameState, playerIndex, pieceIndex, result))
+                DoSameColorJump(gameState, playerIndex, pieceIndex, result);
+
+            DoFinishCheck(gameState, playerIndex, result);
         }
 
         /// <summary>
@@ -578,13 +544,5 @@ namespace FlightChess.Common
             return gameState.CurrentPlayerIndex; // 不应发生
         }
 
-        /// <summary>
-        /// 将 GameState 加载到引擎（客户端用于本地计算合法移动）
-        /// </summary>
-        public static GameState ApplyGameState(GameState source)
-        {
-            // 直接返回深拷贝供客户端使用
-            return source.DeepCopy();
-        }
     }
 }

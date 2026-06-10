@@ -28,9 +28,6 @@ namespace FlightChess.Client
         /// <summary>玩家名称</summary>
         public string PlayerName { get; private set; }
 
-        /// <summary>是否点击了连接按钮</summary>
-        public bool ConnectClicked { get; private set; }
-
         public ConnectForm()
         {
             InitializeComponent();
@@ -150,8 +147,6 @@ namespace FlightChess.Client
             PlayerName = txtPlayerName.Text.Trim();
             if (string.IsNullOrEmpty(PlayerName))
                 PlayerName = "Player";
-
-            ConnectClicked = true;
         }
     }
 }

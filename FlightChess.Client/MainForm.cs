@@ -131,9 +131,6 @@ namespace FlightChess.Client
             Color.FromArgb(155, 125, 5),
             Color.FromArgb(20, 70, 165)
         };
-        private static readonly string[] PlyName = { "红", "绿", "黄", "蓝" };
-        private static readonly int[] StartCells = { 0, 39, 26, 13 };
-
         // 格子颜色：红绿黄蓝四色固定循环（与阵营色对应）
         private static readonly Color[] CellColors = {
             Color.FromArgb(215, 60, 60),    // 红格
@@ -152,8 +149,20 @@ namespace FlightChess.Client
         public MainForm()
         {
             _myPlayerName = "设计器";
+            CommonInit();
+        }
+
+        public MainForm(string server, int port, string name) : this()
+        {
+            _myPlayerName = name;
+            ConnectToServer(server, port);
+        }
+
+        /// <summary>两个构造函数共享的初始化逻辑</summary>
+        private void CommonInit()
+        {
             InitializeComponent();
-            HookEvents();  // 事件绑定独立于设计器生成的 InitializeComponent
+            HookEvents();
             // 双缓冲在运行时启用，设计时跳过（反射调用会破坏设计器解析器）
             if (!DesignMode)
             {
@@ -165,22 +174,6 @@ namespace FlightChess.Client
             InitFireworkTimer();
             InitBoardGeometry();
             InitChatPanel();
-        }
-
-        public MainForm(string server, int port, string name)
-        {
-            _myPlayerName = name;
-            InitializeComponent();
-            HookEvents();  // 事件绑定独立于设计器生成的 InitializeComponent
-            // 双缓冲在运行时启用
-            typeof(Panel).GetProperty("DoubleBuffered",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                ?.SetValue(boardPanel, true, null);
-            InitAnimationTimer();
-            InitFireworkTimer();
-            InitBoardGeometry();
-            InitChatPanel();
-            ConnectToServer(server, port);
         }
 
         /// <summary>绑定所有控件事件（独立于设计器生成的 InitializeComponent，防止设计器覆盖）</summary>
@@ -266,7 +259,7 @@ namespace FlightChess.Client
             // 总长 = 4×200 + 8×160 = 2080，step = 40
             float totalLen = 0;
             foreach (var (a, b, _) in _segments)
-                totalLen += DistF(a.X, a.Y, b.X, b.Y);
+                totalLen += Dist(a.X, a.Y, b.X, b.Y);
 
             float step = totalLen / 52f;   // 40.0
 
@@ -281,7 +274,7 @@ namespace FlightChess.Client
             for (int s = 0; s < _segments.Count; s++)
             {
                 var (a, b, _) = _segments[s];
-                cumLen += DistF(a.X, a.Y, b.X, b.Y);
+                cumLen += Dist(a.X, a.Y, b.X, b.Y);
                 segEndDists[s] = cumLen;
             }
 
@@ -300,7 +293,7 @@ namespace FlightChess.Client
                     segStartDist = segEndDists[s];
                 }
                 var (sa, sb, sAng) = _segments[segIdx];
-                float segLen = DistF(sa.X, sa.Y, sb.X, sb.Y);
+                float segLen = Dist(sa.X, sa.Y, sb.X, sb.Y);
                 float t = (dist - segStartDist) / segLen;
                 if (t < 0) t = 0;
                 if (t > 1) t = 1;
@@ -1129,12 +1122,6 @@ namespace FlightChess.Client
         }
 
         private static float Dist(float x1, float y1, float x2, float y2)
-        {
-            float dx = x1 - x2, dy = y1 - y2;
-            return (float)Math.Sqrt(dx * dx + dy * dy);
-        }
-
-        private static float DistF(float x1, float y1, float x2, float y2)
         {
             float dx = x1 - x2, dy = y1 - y2;
             return (float)Math.Sqrt(dx * dx + dy * dy);
@@ -1975,8 +1962,8 @@ namespace FlightChess.Client
         {
             var m = JsonConvert.DeserializeObject<JoinGameResponseMessage>(json);
             _myPlayerId = m.PlayerId;
-            this.Text = string.Format("飞行棋 - {0}({1}方)", _myPlayerName, PlyName[_myPlayerId]);
-            Log("加入成功！你是 {0} 方", PlyName[_myPlayerId]);
+            this.Text = string.Format("飞行棋 - {0}({1}方)", _myPlayerName, FlightChessEngine.PlayerColorNames[_myPlayerId]);
+            Log("加入成功！你是 {0} 方", FlightChessEngine.PlayerColorNames[_myPlayerId]);
         }
 
         private void HandleErr(string json)
@@ -2122,7 +2109,7 @@ namespace FlightChess.Client
                 // 显示第一名
                 string firstPlace = "";
                 for (int i = 0; i < 4; i++)
-                    if (st.Players[i].Rank == 1) { firstPlace = PlyName[i]; break; }
+                    if (st.Players[i].Rank == 1) { firstPlace = FlightChessEngine.PlayerColorNames[i]; break; }
                 lblCurrentPlayer.Text = string.Format("游戏结束！{0}方冠军", firstPlace);
                 lblCurrentPlayer.ForeColor = Color.FromArgb(255, 215, 0);
                 btnRollDice.Enabled = false;
@@ -2152,7 +2139,7 @@ namespace FlightChess.Client
                     ? string.Format(" (第{0}名已归营)", cp.Rank)
                     : "";
                 lblCurrentPlayer.Text = string.Format("当前: {0}({1}方){2}",
-                    cp.Name, PlyName[st.CurrentPlayerIndex], extra);
+                    cp.Name, FlightChessEngine.PlayerColorNames[st.CurrentPlayerIndex], extra);
                 lblCurrentPlayer.ForeColor = PlyCol[st.CurrentPlayerIndex];
             }
             lblDiceValue.Text = st.DiceValue > 0 ? string.Format("{0} 点", st.DiceValue) : "骰子: -";

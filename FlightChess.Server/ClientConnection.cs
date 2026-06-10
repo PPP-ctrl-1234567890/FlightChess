@@ -71,7 +71,14 @@ namespace FlightChess.Server
                     if (string.IsNullOrWhiteSpace(line))
                         continue;
 
-                    Console.WriteLine("[收到] 来自玩家 {0}: {1}", PlayerId, line);
+                    // 简洁日志：仅显示消息类型，不输出完整 JSON
+                    try
+                    {
+                        JObject obj = JObject.Parse(line);
+                        string type = obj["Type"]?.Value<string>() ?? "?";
+                        Console.WriteLine("[收] {0}: {1}", PlayerId, type);
+                    }
+                    catch { Console.WriteLine("[收] {0}: ?", PlayerId); }
                     _server.ProcessMessage(this, line);
                 }
             }
@@ -85,7 +92,7 @@ namespace FlightChess.Server
             }
             catch (Exception ex)
             {
-                Console.WriteLine("[错误] 接收线程异常 (玩家{0}): {1}", PlayerId, ex.Message);
+                Console.WriteLine("[!] 接收异常 (玩家{0}): {1}", PlayerId, ex.Message);
             }
             finally
             {
@@ -103,11 +110,21 @@ namespace FlightChess.Server
             {
                 string json = JsonConvert.SerializeObject(message);
                 _writer.WriteLine(json);
-                Console.WriteLine("[发送] 给玩家 {0}: {1}", PlayerId, json);
+                // 仅记录非 GameStateUpdate 的消息（GameStateUpdate 体积大且频繁）
+                if (message is GameStateUpdateMessage)
+                {
+                    // 不输出大型状态更新
+                }
+                else
+                {
+                    var typeProp = message.GetType().GetProperty("Type");
+                    string typeName = typeProp?.GetValue(message) as string ?? "?";
+                    Console.WriteLine("[发] {0}: {1}", PlayerId, typeName);
+                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine("[错误] 发送消息失败 (玩家{0}): {1}", PlayerId, ex.Message);
+                Console.WriteLine("[!] 发送失败 (玩家{0}): {1}", PlayerId, ex.Message);
             }
         }
 

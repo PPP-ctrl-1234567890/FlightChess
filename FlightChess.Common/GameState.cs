@@ -37,11 +37,11 @@ namespace FlightChess.Common
         {
             // 四个玩家的起始偏移：红0, 绿13, 黄26, 蓝39
             Players = new Player[4];
-            int[] offsets = new int[] { 0, 39, 26, 13 };
-            string[] colors = new string[] { "红", "绿", "黄", "蓝" };
             for (int i = 0; i < 4; i++)
             {
-                Players[i] = new Player(i, colors[i], offsets[i]);
+                Players[i] = new Player(i,
+                    FlightChessEngine.PlayerColorNames[i],
+                    FlightChessEngine.PlayerStartOffsets[i]);
                 Players[i].IsConnected = false; // 初始无人连接
                 Players[i].HasJoined = false;   // 初始无玩家加入
             }

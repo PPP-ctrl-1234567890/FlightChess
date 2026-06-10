@@ -55,10 +55,10 @@ namespace FlightChess.Server
             _listener.Start();
             _isRunning = true;
 
-            Console.WriteLine("=================================");
-            Console.WriteLine("  飞行棋联机游戏服务器");
-            Console.WriteLine("  监听端口: {0}", port);
-            Console.WriteLine("=================================");
+            Console.WriteLine("╔══════════════════════════╗");
+            Console.WriteLine("║  飞行棋联机游戏服务器    ║");
+            Console.WriteLine("║  端口: {0,-16} ║", port);
+            Console.WriteLine("╚══════════════════════════╝");
 
             _acceptThread = new Thread(AcceptClientsLoop);
             _acceptThread.IsBackground = true;
@@ -94,12 +94,10 @@ namespace FlightChess.Server
                 try
                 {
                     TcpClient tcpClient = _listener.AcceptTcpClient();
-                    Console.WriteLine("[连接] 新客户端连接: {0}", tcpClient.Client.RemoteEndPoint);
 
                     int assignedId = -1;
                     lock (_gameStateLock)
                     {
-                        // 查找空闲位置
                         for (int i = 0; i < 4; i++)
                         {
                             if (!_gameState.Players[i].IsConnected)
@@ -111,8 +109,7 @@ namespace FlightChess.Server
 
                         if (assignedId < 0)
                         {
-                            Console.WriteLine("[拒绝] 房间已满，拒绝新连接。");
-                            // 发送拒绝消息
+                            Console.WriteLine("[!] 房间已满，拒绝连接");
                             try
                             {
                                 var stream = tcpClient.GetStream();
@@ -137,16 +134,16 @@ namespace FlightChess.Server
                     }
 
                     conn.Start();
-                    Console.WriteLine("[分配] 客户端分配到玩家 ID: {0}", assignedId);
+                    Console.WriteLine("[+] {0} → {1}(ID:{2})",
+                        tcpClient.Client.RemoteEndPoint, CN(assignedId), assignedId);
                 }
                 catch (SocketException)
                 {
-                    // 监听器已停止
                     break;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("[错误] 接受连接时出错: {0}", ex.Message);
+                    Console.WriteLine("[!] 接受连接出错: {0}", ex.Message);
                 }
             }
         }
@@ -195,7 +192,7 @@ namespace FlightChess.Server
             }
             catch (Exception ex)
             {
-                Console.WriteLine("[错误] 处理消息时出错: {0}", ex.Message);
+                Console.WriteLine("[!] 消息处理错误: {0}", ex.Message);
                 SendError(sender, "服务器内部错误: " + ex.Message);
             }
         }
@@ -228,7 +225,7 @@ namespace FlightChess.Server
 
             string logMsg = string.Format("{0} 加入了游戏。", playerName);
             AddLog(logMsg);
-            Console.WriteLine("[加入] {0} (ID: {1})", playerName, sender.PlayerId);
+            Console.WriteLine("[+] {0}: {1}", CN(sender.PlayerId), playerName);
 
             // 向该客户端发送 JoinGameResponse 告知其玩家 ID
             JoinGameResponseMessage response = new JoinGameResponseMessage
@@ -278,10 +275,9 @@ namespace FlightChess.Server
                 int dice = _engine.RollDice();
                 _gameState.DiceValue = dice;
 
-                string logMsg = string.Format("{0} 掷出了 {1} 点。",
-                    _gameState.Players[sender.PlayerId].Name, dice);
+                string playerName = _gameState.Players[sender.PlayerId].Name;
+                string logMsg = string.Format("{0} 掷出了 {1} 点。", playerName, dice);
                 AddLog(logMsg);
-                Console.WriteLine("[游戏] " + logMsg);
 
                 // 检查是否有合法移动
                 var validMoves = _engine.GetValidMoves(
@@ -290,10 +286,13 @@ namespace FlightChess.Server
                 if (validMoves.Count == 0)
                 {
                     noValidMoves = true;
-                    logMsg = string.Format("{0} 没有棋子可以移动，轮到下一家。",
-                        _gameState.Players[sender.PlayerId].Name);
+                    Console.WriteLine("[掷] {0} → {1}, 无棋可移→跳过", CN(sender.PlayerId), dice);
+                    logMsg = string.Format("{0} 没有棋子可以移动，轮到下一家。", playerName);
                     AddLog(logMsg);
-                    Console.WriteLine("[游戏] " + logMsg);
+                }
+                else
+                {
+                    Console.WriteLine("[掷] {0} → {1}", CN(sender.PlayerId), dice);
                 }
             }
 
@@ -369,26 +368,27 @@ namespace FlightChess.Server
                     return;
                 }
 
+                string playerName = _gameState.Players[sender.PlayerId].Name;
                 string logMsg = result.Message;
                 AddLog(logMsg);
-                Console.WriteLine("[游戏] " + logMsg);
+                Console.WriteLine("[移] {0} 棋{1}: {2}", CN(sender.PlayerId),
+                    msg.PieceIndex + 1, result.Message);
 
                 // 处理后续
                 if (result.GameOver)
                 {
                     AddLog("所有玩家均已完成归营，游戏结束！");
+                    Console.WriteLine("[!!] 游戏结束!");
                     _gameState.DiceValue = 0;
                 }
                 else if (result.ExtraTurn)
                 {
-                    // 掷出 6 点，同一位玩家继续
-                    AddLog(string.Format("{0} 掷出了 6 点，获得额外回合！",
-                        _gameState.Players[sender.PlayerId].Name));
-                    _gameState.DiceValue = 0; // 重置骰子以便重新掷
+                    AddLog(string.Format("{0} 掷出了 6 点，获得额外回合！", playerName));
+                    Console.WriteLine("[6] {0} 额外回合", CN(sender.PlayerId));
+                    _gameState.DiceValue = 0;
                 }
                 else
                 {
-                    // 切换到下一个玩家
                     _gameState.CurrentPlayerIndex = _engine.GetNextPlayerIndex(_gameState);
                     _gameState.DiceValue = 0;
                 }
@@ -412,13 +412,12 @@ namespace FlightChess.Server
                 }
 
                 // 重置游戏状态
-                int[] offsets = new int[] { 0, 39, 26, 13 };
-                string[] colors = new string[] { "红", "绿", "黄", "蓝" };
                 for (int i = 0; i < 4; i++)
                 {
                     bool wasConnected = _gameState.Players[i].IsConnected;
                     string name = _gameState.Players[i].Name;
-                    _gameState.Players[i] = new Common.Player(i, name, offsets[i]);
+                    _gameState.Players[i] = new Common.Player(i, name,
+                        FlightChessEngine.PlayerStartOffsets[i]);
                     _gameState.Players[i].IsConnected = wasConnected;
                 }
                 _gameState.CurrentPlayerIndex = 0;
@@ -427,7 +426,7 @@ namespace FlightChess.Server
                 _gameState.FinishCount = 0;
 
                 AddLog("游戏已重置，新一局开始！");
-                Console.WriteLine("[游戏] 游戏已重置");
+                Console.WriteLine("[↺] 新一局开始");
             }
             BroadcastGameState();
             CheckAndTriggerAI();  // 重置后检查首玩家是否需要 AI
@@ -451,7 +450,7 @@ namespace FlightChess.Server
 
             string logMsg = string.Format("[聊天] {0}: {1}", msg.SenderName, msg.Content);
             AddLog(logMsg);
-            Console.WriteLine(logMsg);
+            Console.WriteLine("[聊] {0}: {1}", CN(sender.PlayerId), msg.Content);
 
             // 广播给所有已初始化的客户端（包括发送者）
             BroadcastMessage(msg);
@@ -490,7 +489,7 @@ namespace FlightChess.Server
 
             string logMsg = string.Format("{0} 离开了游戏，AI 将自动托管。", playerName);
             AddLog(logMsg);
-            Console.WriteLine("[离开] {0} (ID: {1})，AI 托管中", playerName, playerIndex);
+            Console.WriteLine("[-] {0}({1}) → AI托管", CN(playerIndex), playerName);
 
             // 广播玩家离开消息
             PlayerLeftMessage leftMsg = new PlayerLeftMessage
@@ -587,7 +586,7 @@ namespace FlightChess.Server
                 string logMsg = string.Format("[调试] {0} 获得第一名！（共{1}人完成）",
                     _gameState.Players[playerIndex].Name, _gameState.FinishCount);
                 AddLog(logMsg);
-                Console.WriteLine(logMsg);
+                Console.WriteLine("[调试] {0} 强制获胜 (共{1}人完成)", CN(playerIndex), _gameState.FinishCount);
             }
             BroadcastGameState();
         }
@@ -600,7 +599,7 @@ namespace FlightChess.Server
             if (kickerIdx < 0 || kickerIdx > 3 || kickedIdx < 0 || kickedIdx > 3) return;
             if (kickerIdx == kickedIdx)
             {
-                Console.WriteLine("[调试] 踩子者和被踩者不能是同一人。");
+                Console.WriteLine("[调试] 踩方和被踩方不能是同一人");
                 return;
             }
 
@@ -611,7 +610,7 @@ namespace FlightChess.Server
 
                 if (!kicker.IsConnected || !kicked.IsConnected)
                 {
-                    Console.WriteLine("[调试] 两名玩家都必须已连接。");
+                    Console.WriteLine("[调试] 双方都必须已连接");
                     return;
                 }
 
@@ -652,7 +651,7 @@ namespace FlightChess.Server
                 // 确保骰子在有效范围内
                 if (dice < 1 || dice > 6)
                 {
-                    Console.WriteLine($"[调试] 计算出的骰子值({dice})无效，跳过。");
+                    Console.WriteLine("[调试] 骰子值({0})无效，跳过", dice);
                     return;
                 }
 
@@ -665,21 +664,23 @@ namespace FlightChess.Server
 
                 MoveResult result = _engine.MovePiece(_gameState, kickerIdx, 0);
 
-                string[] colorNames = { "红", "绿", "黄", "蓝" };
                 string logMsg = string.Format("[调试] {0}({1}方) 踩到 {2}({3}方)！{4}",
-                    kicker.Name, colorNames[kickerIdx],
-                    kicked.Name, colorNames[kickedIdx],
+                    kicker.Name, FlightChessEngine.PlayerColorNames[kickerIdx],
+                    kicked.Name, FlightChessEngine.PlayerColorNames[kickedIdx],
                     result.Message);
                 AddLog(logMsg);
-                Console.WriteLine(logMsg);
+                Console.WriteLine("[调试] {0} 踩 {1}! {2}", CN(kickerIdx), CN(kickedIdx), result.Message);
             }
 
             BroadcastGameState();
         }
 
         // =================================================================
-        //  AI 托管：断线玩家自动掷骰 + 随机移动
+        //  控制台输出 & AI 托管
         // =================================================================
+
+        /// <summary>控制台使用的玩家简称（红/绿/黄/蓝）</summary>
+        private static string CN(int idx) => FlightChessEngine.PlayerColorNames[idx];
 
         /// <summary>检查是否还有任何人类玩家保持连接</summary>
         private bool HasAnyConnectedPlayer()
@@ -698,11 +699,10 @@ namespace FlightChess.Server
         /// <summary>检查当前玩家是否需要 AI 托管，如果是则启动延迟定时器</summary>
         private void CheckAndTriggerAI()
         {
-            // 如果没有玩家在线，停止 AI 托管，等待玩家重连
             if (!HasAnyConnectedPlayer())
             {
                 StopAI();
-                Console.WriteLine("[AI] 所有玩家已离开，暂停 AI 托管，等待玩家重连...");
+                Console.WriteLine("[AI] 所有玩家已离开，暂停托管");
                 return;
             }
 
@@ -721,8 +721,8 @@ namespace FlightChess.Server
             {
                 if (_aiTimer == null)
                 {
-                    _aiTimer = new System.Timers.Timer(1200);  // 1.2 秒思考延迟
-                    _aiTimer.AutoReset = false;                // 单次触发
+                    _aiTimer = new System.Timers.Timer(1200);
+                    _aiTimer.AutoReset = false;
                     _aiTimer.Elapsed += OnAITimerElapsed;
                 }
                 _aiTimer.Stop();
@@ -730,114 +730,136 @@ namespace FlightChess.Server
             }
         }
 
+        /// <summary>格式化位置变化为简洁描述（用于控制台）</summary>
+        private static string FmtPos(int oldPos, int newPos)
+        {
+            if (oldPos == -1) return "起飞";
+            if (oldPos == FlightChessEngine.StartPosition) return string.Format("START→{0}", newPos);
+            if (newPos == FlightChessEngine.GoalPosition) return string.Format("{0}→终点", oldPos);
+            return string.Format("{0}→{1}", oldPos, newPos);
+        }
+
+        /// <summary>格式化移动附加效果（踩子/飞跃/同色跳/回退/6点）</summary>
+        private static string FmtFx(MoveResult result)
+        {
+            string fx = "";
+            foreach (var k in result.KickedPieces)
+                fx += string.Format(" 踩{0}棋{1}!", CN(k.Item1), k.Item2 + 1);
+            if (result.Message.Contains("飞跃")) fx += " 飞跃!";
+            else if (result.Message.Contains("同色格")) fx += " 同色跳!";
+            else if (result.Message.Contains("回退")) fx += " 回退!";
+            if (result.ExtraTurn) fx += " [6点]";
+            return fx;
+        }
+
         /// <summary>AI 定时器回调：执行一次掷骰或移动操作</summary>
         private void OnAITimerElapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             try
             {
-            // 安全检查：如果所有玩家都已离开，不再执行 AI 操作
-            if (!HasAnyConnectedPlayer())
-            {
-                StopAI();
-                Console.WriteLine("[AI] 所有玩家已离开，停止 AI 操作。");
-                return;
-            }
-
-            bool shouldBroadcast = false;
-            bool shouldContinue = false;
-
-            lock (_gameStateLock)
-            {
-                if (_gameState.GameOver)
-                    return;
-
-                var player = _gameState.Players[_gameState.CurrentPlayerIndex];
-
-                // 玩家已重连或已归营 → 停止托管
-                if (player.IsConnected || player.Rank > 0)
-                    return;
-
-                if (_gameState.DiceValue == 0)
+                if (!HasAnyConnectedPlayer())
                 {
-                    // === 阶段 1：掷骰子 ===
-                    int dice = _engine.RollDice();
-                    _gameState.DiceValue = dice;
-
-                    string logMsg = string.Format("[AI] {0} 掷出了 {1} 点。", player.Name, dice);
-                    AddLog(logMsg);
-                    Console.WriteLine("[AI] " + logMsg);
-
-                    var validMoves = _engine.GetValidMoves(player, dice);
-
-                    if (validMoves.Count == 0)
-                    {
-                        // 无可移动棋子 → 直接跳过
-                        string skipMsg = string.Format("[AI] {0} 没有棋子可以移动，轮到下一家。", player.Name);
-                        AddLog(skipMsg);
-                        Console.WriteLine("[AI] " + skipMsg);
-
-                        _gameState.CurrentPlayerIndex = _engine.GetNextPlayerIndex(_gameState);
-                        _gameState.DiceValue = 0;
-                        shouldContinue = true;
-                    }
-                    else
-                    {
-                        // 有合法移动 → 等待下一次定时器触发来执行移动
-                        shouldContinue = true;
-                    }
-
-                    shouldBroadcast = true;
+                    StopAI();
+                    Console.WriteLine("[AI] 所有玩家已离开，停止托管");
+                    return;
                 }
-                else
+
+                bool shouldBroadcast = false;
+                bool shouldContinue = false;
+
+                lock (_gameStateLock)
                 {
-                    // === 阶段 2：随机选择合法移动 ===
-                    var validMoves = _engine.GetValidMoves(player, _gameState.DiceValue);
-                    if (validMoves.Count > 0)
+                    if (_gameState.GameOver)
+                        return;
+
+                    int curIdx = _gameState.CurrentPlayerIndex;
+                    var player = _gameState.Players[curIdx];
+
+                    if (player.IsConnected || player.Rank > 0)
+                        return;
+
+                    if (_gameState.DiceValue == 0)
                     {
-                        int pieceIdx = validMoves[_aiRng.Next(validMoves.Count)];
-                        MoveResult result = _engine.MovePiece(_gameState, _gameState.CurrentPlayerIndex, pieceIdx);
+                        // === 阶段 1：掷骰子 ===
+                        int dice = _engine.RollDice();
+                        _gameState.DiceValue = dice;
 
-                        string logMsg = string.Format("[AI] {0} 移动棋子 {1}：{2}",
-                            player.Name, pieceIdx + 1, result.Message);
-                        AddLog(logMsg);
-                        Console.WriteLine("[AI] " + logMsg);
+                        AddLog(string.Format("[AI] {0} 掷出了 {1} 点。", player.Name, dice));
 
-                        if (result.GameOver)
+                        var validMoves = _engine.GetValidMoves(player, dice);
+
+                        if (validMoves.Count == 0)
                         {
-                            AddLog("所有玩家均已完成归营，游戏结束！");
-                            _gameState.DiceValue = 0;
-                        }
-                        else if (result.ExtraTurn)
-                        {
-                            // 掷出 6：同一位玩家继续，重置骰子
-                            AddLog(string.Format("[AI] {0} 掷出了 6 点，额外回合！", player.Name));
+                            AddLog(string.Format("[AI] {0} 没有棋子可以移动，轮到下一家。", player.Name));
+                            Console.WriteLine("[AI] {0} 掷{1}, 无棋可移→跳过", CN(curIdx), dice);
+
+                            _gameState.CurrentPlayerIndex = _engine.GetNextPlayerIndex(_gameState);
                             _gameState.DiceValue = 0;
                             shouldContinue = true;
                         }
                         else
                         {
-                            // 正常切换到下一家
-                            _gameState.CurrentPlayerIndex = _engine.GetNextPlayerIndex(_gameState);
-                            _gameState.DiceValue = 0;
+                            Console.WriteLine("[AI] {0} 掷{1}", CN(curIdx), dice);
                             shouldContinue = true;
                         }
+
+                        shouldBroadcast = true;
                     }
+                    else
+                    {
+                        // === 阶段 2：随机选择合法移动 ===
+                        var validMoves = _engine.GetValidMoves(player, _gameState.DiceValue);
+                        if (validMoves.Count > 0)
+                        {
+                            int pieceIdx = validMoves[_aiRng.Next(validMoves.Count)];
+                            int oldPos = player.Pieces[pieceIdx];
+                            int pieceNum = pieceIdx + 1;
 
-                    shouldBroadcast = true;
+                            MoveResult result = _engine.MovePiece(_gameState, curIdx, pieceIdx);
+                            int newPos = player.Pieces[pieceIdx];
+
+                            // 客户端日志：完整信息
+                            AddLog(string.Format("[AI] {0} 移动棋子 {1}：{2}",
+                                player.Name, pieceNum, result.Message));
+
+                            // 控制台：简洁输出
+                            Console.WriteLine("[AI] {0} 棋{1}: {2}{3}",
+                                CN(curIdx), pieceNum, FmtPos(oldPos, newPos), FmtFx(result));
+
+                            if (result.GameOver)
+                            {
+                                AddLog("所有玩家均已完成归营，游戏结束！");
+                                Console.WriteLine("[!!] 游戏结束!");
+                                _gameState.DiceValue = 0;
+                            }
+                            else if (result.ExtraTurn)
+                            {
+                                AddLog(string.Format("[AI] {0} 掷出了 6 点，额外回合！", player.Name));
+                                _gameState.DiceValue = 0;
+                                shouldContinue = true;
+                            }
+                            else
+                            {
+                                _gameState.CurrentPlayerIndex = _engine.GetNextPlayerIndex(_gameState);
+                                _gameState.DiceValue = 0;
+                                shouldContinue = true;
+                            }
+                        }
+
+                        shouldBroadcast = true;
+                    }
                 }
-            }
 
-            if (shouldBroadcast)
-                BroadcastGameState();
+                if (shouldBroadcast)
+                    BroadcastGameState();
 
-            // 如果还需要继续（下一家也是 AI 或本家额外回合），重新触发
-            if (shouldContinue)
-                CheckAndTriggerAI();
+                if (shouldContinue)
+                    CheckAndTriggerAI();
             }
             catch (Exception ex)
             {
-                Console.WriteLine("[AI错误] {0}", ex.Message);
-                try { CheckAndTriggerAI(); } catch { }  // 尝试恢复
+                Console.WriteLine("[!] AI错误: {0}", ex.Message);
+                try { CheckAndTriggerAI(); } catch { }
             }
         }
 
