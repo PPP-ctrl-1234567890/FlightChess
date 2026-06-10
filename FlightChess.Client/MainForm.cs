@@ -197,7 +197,7 @@ namespace FlightChess.Client
         private void InitAnimationTimer()
         {
             _animTimer = new System.Windows.Forms.Timer();
-            _animTimer.Interval = 100;  // 每步 100ms
+            _animTimer.Interval = 50;  // 每步 50ms（加速防卡顿）
             _animTimer.Tick += AnimTimer_Tick;
         }
 
@@ -1249,7 +1249,13 @@ namespace FlightChess.Client
         /// <summary>检测新旧状态之间的棋子移动，触发步进动画</summary>
         private void DetectAndAnimate(GameState oldState, GameState newState)
         {
-            if (_animTimer.Enabled) return;  // 动画进行中，跳过
+            // 动画进行中：快进到终点，释放动画资源
+            if (_animTimer.Enabled)
+            {
+                _animTimer.Stop();
+                _animPlayer = -1; _animPiece = -1; _animPath = null;
+                _kickedPlayer = -1; _kickedPiece = -1;
+            }
             if (oldState?.Players == null || newState?.Players == null) return;
 
             for (int pl = 0; pl < 4; pl++)
@@ -1260,6 +1266,44 @@ namespace FlightChess.Client
                     int oldPos = oldState.Players[pl].Pieces[qi];
                     int newPos = newState.Players[pl].Pieces[qi];
                     if (oldPos == newPos) continue;
+
+                    // 归营路径到达终点：走过剩余格子到 57 再归营
+                    if (newPos == FlightChessEngine.GoalPosition
+                        && oldPos >= FlightChessEngine.FinishStart
+                        && oldPos <= FlightChessEngine.FinishEnd)
+                    {
+                        var finishPath = new System.Collections.Generic.List<PointF>();
+                        for (int p = oldPos + 1; p <= FlightChessEngine.FinishEnd; p++)
+                            finishPath.Add(GetScreenPosForPosition(newState, pl, p));
+                        _animPlayer = pl;
+                        _animPiece = qi;
+                        _animPath = finishPath;
+                        if (_animPath.Count > 0)
+                        {
+                            _animPathIndex = 0;
+                            _animTimer.Start();
+                        }
+                        return;
+                    }
+
+                    // 主路径直接到达终点：走过主路径剩余 + 全部归营路径到 57
+                    if (newPos == FlightChessEngine.GoalPosition
+                        && oldPos >= 0 && oldPos < FlightChessEngine.BoardSize)
+                    {
+                        var finishPath = new System.Collections.Generic.List<PointF>();
+                        for (int p = oldPos + 1; p <= FlightChessEngine.FinishEnd; p++)
+                            finishPath.Add(GetScreenPosForPosition(newState, pl, p));
+                        _animPlayer = pl;
+                        _animPiece = qi;
+                        _animPath = finishPath;
+                        if (_animPath.Count > 0)
+                        {
+                            _animPathIndex = 0;
+                            _animTimer.Start();
+                        }
+                        DetectKickedPieces(oldState, newState);
+                        return;
+                    }
 
                     // 飞跃跳检测：骰子移动 + 飞跃跳的总位移 ≥ 12
                     // （最大普通移动 = 骰子6 + 同色跳4 = 10；飞跃跳 = 骰子1~6 + 12）
@@ -1378,28 +1422,31 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>在指定坐标生成踩子炸裂粒子</summary>
+        /// <summary>在指定坐标生成踩子炸裂粒子（增强版 — 更多粒子 + 更大范围 + 更持久）</summary>
         private void SpawnExplosion(float x, float y, Color kickerColor)
         {
             _explosionActive = true;
             _explosionParticles.Clear();
 
+            // 爆炸色板：被踩方颜色 + 火焰色系
             Color[] burstColors = new Color[] {
                 kickerColor,
                 Color.FromArgb(255, 100, 30),   // 橙红
-                Color.FromArgb(255, 220, 50),   // 金黄
+                Color.FromArgb(255, 230, 40),   // 明黄
                 Color.FromArgb(255, 255, 240),  // 炽白
-                Color.FromArgb(255, 60, 20),    // 深红
+                Color.FromArgb(255, 50, 10),    // 深红
                 Color.FromArgb(255, 180, 60),   // 橙黄
+                Color.FromArgb(255, 200, 20),   // 橙黄亮
             };
 
-            int particleCount = 25 + _fireworkRng.Next(20);  // 25~44 个粒子
+            // 主爆粒子：数量翻倍，速度更快，范围更大
+            int particleCount = 50 + _fireworkRng.Next(30);  // 50~79 个粒子
             for (int i = 0; i < particleCount; i++)
             {
                 float angle = (float)(_fireworkRng.NextDouble() * Math.PI * 2);
-                float speed = 0.8f + (float)_fireworkRng.NextDouble() * 3.5f;
-                float life = 0.35f + (float)_fireworkRng.NextDouble() * 0.5f;
-                float size = 1.5f + (float)_fireworkRng.NextDouble() * 4.5f;
+                float speed = 1.5f + (float)_fireworkRng.NextDouble() * 6f;  // 1.5~7.5
+                float life = 0.5f + (float)_fireworkRng.NextDouble() * 0.6f; // 0.5~1.1
+                float size = 2.5f + (float)_fireworkRng.NextDouble() * 6f;   // 2.5~8.5
 
                 _explosionParticles.Add(new FireworkParticle
                 {
@@ -1409,6 +1456,22 @@ namespace FlightChess.Client
                     Color = burstColors[_fireworkRng.Next(burstColors.Length)],
                     Life = life,
                     Size = size
+                });
+            }
+
+            // 中心闪光环：少量大粒子慢速扩散，形成冲击波感
+            int flashCount = 8 + _fireworkRng.Next(5);  // 8~12 个闪光粒子
+            for (int i = 0; i < flashCount; i++)
+            {
+                float angle = (float)(i * Math.PI * 2 / flashCount);
+                _explosionParticles.Add(new FireworkParticle
+                {
+                    X = x, Y = y,
+                    Vx = (float)Math.Cos(angle) * 0.3f,
+                    Vy = (float)Math.Sin(angle) * 0.3f,
+                    Color = Color.FromArgb(255, 255, 240),  // 炽白闪光
+                    Life = 0.4f,
+                    Size = 8f + (float)_fireworkRng.NextDouble() * 4f  // 8~12 大粒子
                 });
             }
 
@@ -1443,17 +1506,17 @@ namespace FlightChess.Client
                 _fireworkBurstsLeft--;
             }
 
-            // 更新炸裂粒子
+            // 更新炸裂粒子（慢衰减，更持久明显）
             bool anyExplosionAlive = false;
             foreach (var ep in _explosionParticles)
             {
                 if (ep.Life <= 0) continue;
-                ep.Life -= 0.035f;
+                ep.Life -= 0.020f;          // 慢衰减（~1.3秒@max life 1.1）
                 ep.X += ep.Vx;
                 ep.Y += ep.Vy;
-                ep.Vy += 0.06f;             // 重力（比烟花轻）
-                ep.Vx *= 0.97f;             // 空气阻力
-                ep.Size *= 0.99f;           // 粒子缩小
+                ep.Vy += 0.04f;             // 轻重力
+                ep.Vx *= 0.975f;            // 空气阻力
+                ep.Size *= 0.993f;          // 缓慢缩小
                 if (ep.Life > 0) anyExplosionAlive = true;
             }
             if (!anyExplosionAlive && _explosionActive)
