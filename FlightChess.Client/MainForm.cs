@@ -28,6 +28,18 @@ namespace FlightChess.Client
         private Thread _receiveThread;
         private bool _isConnected;
 
+        // ========== 心跳检测 ==========
+        private DateTime _lastServerMsgTime;
+        private System.Windows.Forms.Timer _heartbeatCheckTimer;
+
+        // ========== 断线重连 ==========
+        private bool _isReconnecting;
+        private int _reconnectAttempts;
+        private const int MAX_RECONNECT_ATTEMPTS = 15; // 约 30 秒（间隔 2 秒）
+        private string _serverAddress;
+        private int _serverPort;
+        private Thread _reconnectThread;
+
         // ========== 状态 ==========
         private GameState _currentGameState;
         private int _myPlayerId = -1;
@@ -155,6 +167,12 @@ namespace FlightChess.Client
         public MainForm(string server, int port, string name) : this()
         {
             _myPlayerName = name;
+            // ★ 强制创建窗口句柄，确保 BeginInvoke 可用 ★
+            // 必须在启动网络连接之前执行，否则服务器的 JoinGameResponse
+            // 会在窗体 Handle 创建前到达 → BeginInvoke 抛 InvalidOperationException
+            // → 消息被静默丢弃 → _myPlayerId 永远为 -1 → UI 永远显示"等待他人…"
+            if (!this.IsHandleCreated)
+                CreateHandle();
             ConnectToServer(server, port);
         }
 
@@ -172,6 +190,7 @@ namespace FlightChess.Client
             }
             InitAnimationTimer();
             InitFireworkTimer();
+            InitHeartbeatTimer();
             InitBoardGeometry();
             InitChatPanel();
         }
@@ -194,6 +213,14 @@ namespace FlightChess.Client
             _animTimer = new System.Windows.Forms.Timer();
             _animTimer.Interval = 50;  // 每步 50ms（加速防卡顿）
             _animTimer.Tick += AnimTimer_Tick;
+        }
+
+        /// <summary>初始化心跳检测计时器（每 3 秒检查一次服务器连接状态）</summary>
+        private void InitHeartbeatTimer()
+        {
+            _heartbeatCheckTimer = new System.Windows.Forms.Timer();
+            _heartbeatCheckTimer.Interval = 3000;
+            _heartbeatCheckTimer.Tick += HeartbeatCheckTimer_Tick;
         }
 
         /// <summary>初始化烟花特效计时器（30fps）</summary>
@@ -1234,18 +1261,14 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>检测新旧状态之间的棋子移动，触发步进动画</summary>
+        /// <summary>检测新旧状态之间的棋子移动，触发步进动画。
+        /// 仅在确实检测到棋子移动时才创建新动画，不会因无移动的状态更新而截断正在播放的动画。</summary>
         private void DetectAndAnimate(GameState oldState, GameState newState)
         {
-            // 动画进行中：快进到终点，释放动画资源
-            if (_animTimer.Enabled)
-            {
-                _animTimer.Stop();
-                _animPlayer = -1; _animPiece = -1; _animPath = null;
-                _kickedPlayer = -1; _kickedPiece = -1;
-            }
             if (oldState?.Players == null || newState?.Players == null) return;
 
+            // 先检测是否有棋子发生了移动，避免因纯信息类 GameStateUpdate
+            // （如其他玩家掷骰子）无故截断正在播放的动画，造成瞬移感。
             for (int pl = 0; pl < 4; pl++)
             {
                 if (!newState.Players[pl].HasJoined) continue;
@@ -1254,6 +1277,14 @@ namespace FlightChess.Client
                     int oldPos = oldState.Players[pl].Pieces[qi];
                     int newPos = newState.Players[pl].Pieces[qi];
                     if (oldPos == newPos) continue;
+
+                    // --- 有棋子移动：先停止当前动画，再启动新动画 ---
+                    if (_animTimer.Enabled)
+                    {
+                        _animTimer.Stop();
+                        _animPlayer = -1; _animPiece = -1; _animPath = null;
+                        _kickedPlayer = -1; _kickedPiece = -1;
+                    }
 
                     // 归营路径到达终点：走过剩余格子到 57 再归营
                     if (newPos == FlightChessEngine.GoalPosition
@@ -1864,6 +1895,9 @@ namespace FlightChess.Client
         {
             try
             {
+                _serverAddress = addr;
+                _serverPort = port;
+                _lastServerMsgTime = DateTime.UtcNow;
                 _tcpClient = new TcpClient(); _tcpClient.Connect(addr, port);
                 _stream = _tcpClient.GetStream(); _reader = new StreamReader(_stream, Encoding.UTF8);
                 _writer = new StreamWriter(_stream, Encoding.UTF8) { AutoFlush = true };
@@ -1872,6 +1906,7 @@ namespace FlightChess.Client
                 SendMessage(new JoinGameMessage { PlayerName = _myPlayerName });
                 _receiveThread = new Thread(ReceiveLoop) { IsBackground = true };
                 _receiveThread.Start();
+                _heartbeatCheckTimer.Start();
             }
             catch (Exception ex)
             {
@@ -1885,6 +1920,7 @@ namespace FlightChess.Client
         {
             if (!_isConnected) return;
             try { _writer.WriteLine(JsonConvert.SerializeObject(m)); }
+            catch (ObjectDisposedException) { HandleDisconnect(); }
             catch (Exception ex) { Log("发送失败: {0}", ex.Message); HandleDisconnect(); }
         }
 
@@ -1892,17 +1928,23 @@ namespace FlightChess.Client
         {
             try
             {
-                while (_isConnected)
+                while (_isConnected && !_isReconnecting)
                 {
                     string l = _reader.ReadLine();
                     if (l == null) break;
                     if (string.IsNullOrWhiteSpace(l)) continue;
+                    _lastServerMsgTime = DateTime.UtcNow; // 更新收到消息的时间
                     ProcessMsg(l);
                 }
             }
             catch (IOException) { }
+            catch (ObjectDisposedException) { }
             catch (Exception ex) { LogInvoke("接收错误: {0}", ex.Message); }
-            finally { HandleDisconnect(); }
+            finally
+            {
+                if (!_isReconnecting)
+                    HandleDisconnect();
+            }
         }
 
         private void ProcessMsg(string json)
@@ -1911,7 +1953,21 @@ namespace FlightChess.Client
             {
                 var o = JObject.Parse(json);
                 var t = o["Type"]?.Value<string>();
-                this.Invoke(new Action(() =>
+
+                // Pong 消息无需 UI 操作，直接忽略
+                if (t == MessageType.Pong)
+                    return;
+
+                // Ping 消息直接回复，不经过 UI 线程（避免阻塞接收线程）
+                if (t == MessageType.Ping)
+                {
+                    SendMessage(new PongMessage());
+                    return;
+                }
+
+                // 使用 BeginInvoke 而非 Invoke：不阻塞接收线程，
+                // 防止 UI 繁忙时 TCP 接收缓冲区填满 → 服务端发送阻塞 → 连锁延迟
+                this.BeginInvoke(new Action(() =>
                 {
                     try
                     {
@@ -1926,16 +1982,19 @@ namespace FlightChess.Client
                     }
                     catch (Exception ex)
                     {
-                        // 防止 UI 线程异常导致接收线程崩溃
                         Log("处理消息异常: {0}", ex.Message);
                     }
                 }));
             }
             catch (JsonException) { }
-            catch (InvalidOperationException) { }
+            catch (InvalidOperationException)
+            {
+                // 不应发生：构造函数已确保 Handle 创建。若到达此处说明存在异常路径。
+                System.Diagnostics.Debug.Fail("ProcessMsg: BeginInvoke失败, Handle未创建");
+            }
             catch (Exception ex)
             {
-                Log("消息解析异常: {0}", ex.Message);
+                LogInvoke("消息解析异常: {0}", ex.Message);
             }
         }
 
@@ -1969,16 +2028,14 @@ namespace FlightChess.Client
         private void HandleErr(string json)
         {
             var m = JsonConvert.DeserializeObject<ErrorMessage>(json);
-            MessageBox.Show(m.Message, "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Log("[服务器] {0}", m.Message);
         }
 
         private void HandlePL(string json)
         {
             var m = JsonConvert.DeserializeObject<PlayerLeftMessage>(json);
-            string msg = string.Format("【{0}】掉线了！\nAI 将自动托管该玩家，游戏继续。", m.PlayerName);
+            string msg = string.Format("【{0}】掉线了（30秒内可重连）。", m.PlayerName);
             Log(msg);
-            MessageBox.Show(msg, "玩家掉线", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void HandleChat(string json)
@@ -2085,16 +2142,254 @@ namespace FlightChess.Client
             }
         }
 
+        /// <summary>
+        /// 心跳检测：如果超过 18 秒未收到服务器任何消息，认为连接断开并启动重连
+        /// （放宽到 18 秒 = 容忍 3 次心跳探测未回复，避免 UI 繁忙时误判）
+        /// </summary>
+        private void HeartbeatCheckTimer_Tick(object sender, EventArgs e)
+        {
+            if (!_isConnected || _isReconnecting) return;
+
+            double elapsed = (DateTime.UtcNow - _lastServerMsgTime).TotalSeconds;
+            if (elapsed > 18.0)
+            {
+                Log("服务器响应超时（{0:F0}秒无消息），尝试重连...", elapsed);
+                HandleDisconnect();
+            }
+        }
+
         private void HandleDisconnect()
         {
             _isConnected = false;
+            _heartbeatCheckTimer.Stop();
             try { _stream?.Close(); } catch { }
             try { _tcpClient?.Close(); } catch { }
-            this.Invoke(new Action(() =>
+
+            if (_myPlayerId >= 0 && !_isReconnecting)
             {
-                Log("连接已断开。");
+                // 已加入游戏 → 尝试重连
+                Log("连接断开，开始后台重连...");
+                StartReconnection();
+            }
+            else
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (_myPlayerId < 0)
+                    {
+                        // 从未成功加入（被服务器拒绝或连接失败），不是断线重连
+                        Log("无法加入游戏。");
+                        lblCurrentPlayer.Text = "连接失败";
+                    }
+                    else
+                    {
+                        Log("连接已断开。");
+                        lblCurrentPlayer.Text = "连接已断开";
+                    }
+                    btnRollDice.Enabled = false;
+                    boardPanel.Invalidate();
+                }));
+            }
+        }
+
+        // =================================================================
+        //  断线重连逻辑
+        // =================================================================
+
+        /// <summary>
+        /// 应用重连结果：替换连接对象、关闭旧连接、启动新接收线程
+        /// </summary>
+        private void ApplyReconnectResult(TcpClient newClient, NetworkStream newStream,
+            StreamReader newReader, StreamWriter newWriter)
+        {
+            // 替换连接对象
+            var oldClient = _tcpClient;
+            var oldStream = _stream;
+            var oldReader = _reader;
+            var oldWriter = _writer;
+
+            _tcpClient = newClient;
+            _stream = newStream;
+            _reader = newReader;
+            _writer = newWriter;
+            _isConnected = true;
+            _isReconnecting = false;
+            _lastServerMsgTime = DateTime.UtcNow;
+
+            // 关闭旧连接
+            try { oldWriter?.Dispose(); } catch { }
+            try { oldReader?.Dispose(); } catch { }
+            try { oldStream?.Close(); } catch { }
+            try { oldClient?.Close(); } catch { }
+
+            // 启动新的接收线程
+            _receiveThread = new Thread(ReceiveLoop) { IsBackground = true };
+            _receiveThread.Start();
+        }
+
+        private void StartReconnection()
+        {
+            _isReconnecting = true;
+            _reconnectAttempts = 0;
+            _reconnectThread = new Thread(ReconnectionLoop) { IsBackground = true };
+            _reconnectThread.Start();
+        }
+
+        /// <summary>后台重连循环：每 2 秒尝试一次，最多尝试 MAX_RECONNECT_ATTEMPTS 次</summary>
+        private void ReconnectionLoop()
+        {
+            while (_reconnectAttempts < MAX_RECONNECT_ATTEMPTS && _isReconnecting)
+            {
+                Thread.Sleep(2000);
+                // 每次 Sleep 后重新检查，防止窗体关闭时继续重连
+                if (!_isReconnecting) return;
+                _reconnectAttempts++;
+
+                TcpClient newClient = null;
+                StreamReader newReader = null;
+                StreamWriter newWriter = null;
+                NetworkStream newStream = null;
+
+                try
+                {
+                    LogInvoke("重连尝试 {0}/{1}...", _reconnectAttempts, MAX_RECONNECT_ATTEMPTS);
+
+                    newClient = new TcpClient();
+                    newClient.Connect(_serverAddress, _serverPort);
+                    newClient.ReceiveTimeout = 5000;
+                    newStream = newClient.GetStream();
+                    newReader = new StreamReader(newStream, Encoding.UTF8);
+                    newWriter = new StreamWriter(newStream, Encoding.UTF8) { AutoFlush = true };
+
+                    // 先尝试 ReconnectMessage（进程内重连）
+                    string reconnectJson = JsonConvert.SerializeObject(new ReconnectMessage
+                    {
+                        PlayerId = _myPlayerId,
+                        PlayerName = _myPlayerName
+                    });
+                    newWriter.WriteLine(reconnectJson);
+
+                    // ★ 循环读取，直到收到 JoinGameResponse 或 Error
+                    // 服务器可能在 JoinGameResponse 之前发送 GameStateUpdate / Ping 等消息
+                    bool reconnected = false;
+                    bool shouldFallback = false;
+                    DateTime readStart = DateTime.UtcNow;
+
+                    while ((DateTime.UtcNow - readStart).TotalSeconds < 5.0)
+                    {
+                        string response = newReader.ReadLine();
+                        if (response == null || string.IsNullOrWhiteSpace(response))
+                            continue;
+
+                        JObject obj = JObject.Parse(response);
+                        string msgType = obj["Type"]?.Value<string>();
+
+                        if (msgType == MessageType.JoinGameResponse)
+                        {
+                            // === Reconnect 成功 ===
+                            ApplyReconnectResult(newClient, newStream, newReader, newWriter);
+                            this.BeginInvoke(new Action(() =>
+                            {
+                                _heartbeatCheckTimer.Start();
+                                Log("重连成功！恢复游戏状态...");
+                            }));
+                            reconnected = true;
+                            break;
+                        }
+                        else if (msgType == MessageType.Error)
+                        {
+                            // Reconnect 被拒 → 降级为 JoinGame
+                            LogInvoke("重连被拒（{0}），尝试以新身份加入...",
+                                obj["Message"]?.Value<string>() ?? "未知原因");
+                            shouldFallback = true;
+                            break;
+                        }
+                        else if (msgType == MessageType.Ping)
+                        {
+                            // 回复 Pong
+                            newWriter.WriteLine(JsonConvert.SerializeObject(new PongMessage()));
+                        }
+                        else if (msgType == MessageType.GameStateUpdate)
+                        {
+                            // 中间状态更新：暂存，待重连成功后处理
+                            // （重连成功后服务器会重新广播完整状态，此处可忽略）
+                        }
+                        // 其他消息（Chat、PlayerLeft 等）忽略
+                    }
+
+                    if (reconnected)
+                        return;
+
+                    // === 降级为 JoinGame ===
+                    if (shouldFallback)
+                    {
+                        newWriter.WriteLine(JsonConvert.SerializeObject(
+                            new JoinGameMessage { PlayerName = _myPlayerName }));
+
+                        readStart = DateTime.UtcNow;
+                        while ((DateTime.UtcNow - readStart).TotalSeconds < 5.0)
+                        {
+                            string response = newReader.ReadLine();
+                            if (response == null || string.IsNullOrWhiteSpace(response))
+                                continue;
+
+                            JObject obj = JObject.Parse(response);
+                            string msgType = obj["Type"]?.Value<string>();
+
+                            if (msgType == MessageType.JoinGameResponse)
+                            {
+                                // === JoinGame 成功（回到原位或新位） ===
+                                ApplyReconnectResult(newClient, newStream, newReader, newWriter);
+                                this.BeginInvoke(new Action(() =>
+                                {
+                                    _heartbeatCheckTimer.Start();
+                                    Log("以新身份重新加入游戏！");
+                                }));
+                                return;
+                            }
+                            else if (msgType == MessageType.Error)
+                            {
+                                LogInvoke("加入失败: {0}",
+                                    obj["Message"]?.Value<string>() ?? "未知错误");
+                                break;
+                            }
+                            else if (msgType == MessageType.Ping)
+                            {
+                                newWriter.WriteLine(JsonConvert.SerializeObject(new PongMessage()));
+                            }
+                        }
+                    }
+
+                    // 本次尝试失败，清理临时连接
+                    try { newWriter?.Dispose(); } catch { }
+                    try { newReader?.Dispose(); } catch { }
+                    try { newStream?.Close(); } catch { }
+                    try { newClient?.Close(); } catch { }
+                }
+                catch (ObjectDisposedException)
+                {
+                    // 连接对象已被释放（窗体关闭），停止重连
+                    _isReconnecting = false;
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    try { newWriter?.Dispose(); } catch { }
+                    try { newReader?.Dispose(); } catch { }
+                    try { newStream?.Close(); } catch { }
+                    try { newClient?.Close(); } catch { }
+
+                    LogInvoke("重连失败: {0}", ex.Message);
+                }
+            }
+
+            // 所有重试耗尽
+            _isReconnecting = false;
+            this.BeginInvoke(new Action(() =>
+            {
+                Log("重连失败（已超30秒），请重新打开客户端以新身份加入（如还有空位）。");
                 btnRollDice.Enabled = false;
-                lblCurrentPlayer.Text = "连接已断开";
+                lblCurrentPlayer.Text = "重连失败";
                 boardPanel.Invalidate();
             }));
         }
@@ -2138,8 +2433,10 @@ namespace FlightChess.Client
                 string extra = cp.Rank > 0
                     ? string.Format(" (第{0}名已归营)", cp.Rank)
                     : "";
-                lblCurrentPlayer.Text = string.Format("当前: {0}({1}方){2}",
-                    cp.Name, FlightChessEngine.PlayerColorNames[st.CurrentPlayerIndex], extra);
+                string aiTag = (!cp.IsConnected && cp.HasJoined)
+                    ? "[AI托管] " : "";
+                lblCurrentPlayer.Text = string.Format("当前: {0}{1}({2}方){3}",
+                    aiTag, cp.Name, FlightChessEngine.PlayerColorNames[st.CurrentPlayerIndex], extra);
                 lblCurrentPlayer.ForeColor = PlyCol[st.CurrentPlayerIndex];
             }
             lblDiceValue.Text = st.DiceValue > 0 ? string.Format("{0} 点", st.DiceValue) : "骰子: -";
@@ -2208,7 +2505,9 @@ namespace FlightChess.Client
 
         private void MainForm_FormClosing(object s, FormClosingEventArgs e)
         {
+            _isReconnecting = false; // 停止重连循环
             _isConnected = false;
+            _heartbeatCheckTimer?.Stop();
             try { _stream?.Close(); } catch { }
             try { _tcpClient?.Close(); } catch { }
         }
@@ -2220,7 +2519,7 @@ namespace FlightChess.Client
         {
             string m = string.Format("[{0:HH:mm:ss}] {1}", DateTime.Now, string.Format(fmt, args));
             if (lstLog.InvokeRequired)
-                this.Invoke(new Action(() =>
+                this.BeginInvoke(new Action(() =>
                 {
                     lstLog.Items.Add(m);
                     lstLog.TopIndex = lstLog.Items.Count - 1;
@@ -2237,7 +2536,7 @@ namespace FlightChess.Client
             try
             {
                 string m = string.Format("[{0:HH:mm:ss}] {1}", DateTime.Now, string.Format(fmt, args));
-                this.Invoke(new Action(() =>
+                this.BeginInvoke(new Action(() =>
                 {
                     lstLog.Items.Add(m);
                     lstLog.TopIndex = lstLog.Items.Count - 1;

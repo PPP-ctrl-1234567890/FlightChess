@@ -28,6 +28,9 @@ namespace FlightChess.Server
         /// <summary>是否已通过 JoinGame 完成初始化</summary>
         public bool IsInitialized { get; set; }
 
+        /// <summary>最后一次收到该客户端消息的时间（用于心跳检测）</summary>
+        public DateTime LastActivityTime { get; set; }
+
         public ClientConnection(TcpClient tcpClient, GameServer server)
         {
             _tcpClient = tcpClient;
@@ -40,6 +43,7 @@ namespace FlightChess.Server
             _reader = new StreamReader(_stream, Encoding.UTF8);
             _writer = new StreamWriter(_stream, Encoding.UTF8);
             _writer.AutoFlush = true;
+            LastActivityTime = DateTime.UtcNow;
         }
 
         /// <summary>
@@ -70,6 +74,8 @@ namespace FlightChess.Server
 
                     if (string.IsNullOrWhiteSpace(line))
                         continue;
+
+                    LastActivityTime = DateTime.UtcNow; // 更新最后活动时间
 
                     // 简洁日志：仅显示消息类型，不输出完整 JSON
                     try
@@ -126,6 +132,34 @@ namespace FlightChess.Server
             {
                 Console.WriteLine("[!] 发送失败 (玩家{0}): {1}", PlayerId, ex.Message);
             }
+        }
+
+        /// <summary>
+        /// 替换底层 TCP 连接（用于断线重连时复用 ClientConnection 对象）
+        /// </summary>
+        public void ReplaceConnection(TcpClient newTcpClient)
+        {
+            try
+            {
+                // 关闭旧连接
+                _stream?.Close();
+                _tcpClient?.Close();
+            }
+            catch { }
+
+            // 替换为新连接
+            _tcpClient = newTcpClient;
+            _stream = newTcpClient.GetStream();
+            _reader = new StreamReader(_stream, Encoding.UTF8);
+            _writer = new StreamWriter(_stream, Encoding.UTF8);
+            _writer.AutoFlush = true;
+            _isRunning = true;
+            LastActivityTime = DateTime.UtcNow;
+
+            // 重启接收线程
+            _receiveThread = new Thread(ReceiveLoop);
+            _receiveThread.IsBackground = true;
+            _receiveThread.Start();
         }
 
         /// <summary>

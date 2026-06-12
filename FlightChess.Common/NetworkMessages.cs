@@ -16,6 +16,9 @@ namespace FlightChess.Common
         public const string JoinGameResponse = "JoinGameResponse";
         public const string ResetGame = "ResetGame";
         public const string Chat = "Chat";
+        public const string Ping = "Ping";
+        public const string Pong = "Pong";
+        public const string Reconnect = "Reconnect";
     }
 
     /// <summary>
@@ -134,6 +137,50 @@ namespace FlightChess.Common
         public ResetGameMessage()
         {
             Type = MessageType.ResetGame;
+        }
+    }
+
+    /// <summary>
+    /// 服务器 → 客户端：心跳探测 Ping
+    /// </summary>
+    [Serializable]
+    public class PingMessage
+    {
+        public string Type { get; set; }
+
+        public PingMessage()
+        {
+            Type = MessageType.Ping;
+        }
+    }
+
+    /// <summary>
+    /// 客户端 → 服务器：心跳回复 Pong
+    /// </summary>
+    [Serializable]
+    public class PongMessage
+    {
+        public string Type { get; set; }
+
+        public PongMessage()
+        {
+            Type = MessageType.Pong;
+        }
+    }
+
+    /// <summary>
+    /// 客户端 → 服务器：断线重连请求
+    /// </summary>
+    [Serializable]
+    public class ReconnectMessage
+    {
+        public string Type { get; set; }
+        public int PlayerId { get; set; }
+        public string PlayerName { get; set; }
+
+        public ReconnectMessage()
+        {
+            Type = MessageType.Reconnect;
         }
     }
 
