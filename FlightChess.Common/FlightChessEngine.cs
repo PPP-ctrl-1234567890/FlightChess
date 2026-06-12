@@ -255,15 +255,9 @@ namespace FlightChess.Common
                     return result;
                 }
 
-                // 若恰好到达 FinishEnd=57，直接完成
+                // 若恰好到达 FinishEnd=57，直接完成（途经格子不触发踩子）
                 if (newPos == FinishEnd)
                 {
-                    // 逐格检查途径的主路径格子（0 ~ 51）
-                    for (int pos = 0; pos < BoardSize; pos++)
-                    {
-                        int absIdx = ToAbsoluteIndex(player.StartOffset, pos);
-                        DoKickCheckAt(gameState, playerIndex, absIdx, result);
-                    }
                     player.Pieces[pieceIndex] = GoalPosition;
                     result.Success = true;
                     result.Message = string.Format("{0} 的棋子 {1} 从START起飞并直接到达终点！",
@@ -271,16 +265,12 @@ namespace FlightChess.Common
                 }
                 else
                 {
-                    // 逐格检查途径的主路径格子（0 ~ newPos）
-                    for (int pos = 0; pos <= newPos && pos < BoardSize; pos++)
-                    {
-                        int absIdx = ToAbsoluteIndex(player.StartOffset, pos);
-                        DoKickCheckAt(gameState, playerIndex, absIdx, result);
-                    }
                     player.Pieces[pieceIndex] = newPos;
                     result.Success = true;
                     result.Message = string.Format("{0} 的棋子 {1} 从START进入主路径位置 {2}。",
                         player.Name, pieceIndex + 1, newPos);
+                    // ★ 仅在最终落点检查踩子，不检查途经格子
+                    DoKickCheck(gameState, playerIndex, pieceIndex, result);
                 }
 
                 ApplyPostMoveEffects(gameState, playerIndex, pieceIndex, diceValue,
@@ -301,15 +291,9 @@ namespace FlightChess.Common
                     return result;
                 }
 
-                // 恰好到达 FinishEnd=57：直接完成
+                // 恰好到达 FinishEnd=57：直接完成（途经格子不触发踩子）
                 if (newPos == FinishEnd)
                 {
-                    // 逐格检查途径的主路径格子（oldPos+1 ~ 51）
-                    for (int pos = oldPos + 1; pos < BoardSize; pos++)
-                    {
-                        int absIdx = ToAbsoluteIndex(player.StartOffset, pos);
-                        DoKickCheckAt(gameState, playerIndex, absIdx, result);
-                    }
                     player.Pieces[pieceIndex] = GoalPosition;
                     result.Success = true;
                     result.Message = string.Format("{0} 的棋子 {1} 从 {2} 移动到终点！",
@@ -317,17 +301,12 @@ namespace FlightChess.Common
                 }
                 else
                 {
-                    // 逐格检查途径的主路径格子（oldPos+1 ~ newPos）
-                    int endCheck = newPos < BoardSize ? newPos : BoardSize - 1;
-                    for (int pos = oldPos + 1; pos <= endCheck; pos++)
-                    {
-                        int absIdx = ToAbsoluteIndex(player.StartOffset, pos);
-                        DoKickCheckAt(gameState, playerIndex, absIdx, result);
-                    }
                     player.Pieces[pieceIndex] = newPos;
                     result.Success = true;
                     result.Message = string.Format("{0} 的棋子 {1} 从 {2} 移动到 {3}。",
                         player.Name, pieceIndex + 1, currentPos, newPos);
+                    // ★ 仅在最终落点检查踩子，不检查途经格子
+                    DoKickCheck(gameState, playerIndex, pieceIndex, result);
                 }
 
                 ApplyPostMoveEffects(gameState, playerIndex, pieceIndex, diceValue,
