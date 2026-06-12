@@ -134,32 +134,25 @@ namespace FlightChess.Server
             }
         }
 
-        /// <summary>
-        /// 替换底层 TCP 连接（用于断线重连时复用 ClientConnection 对象）
-        /// </summary>
-        public void ReplaceConnection(TcpClient newTcpClient)
+        /// <summary>检测底层 TCP 连接是否仍然存活</summary>
+        public bool IsSocketConnected
         {
-            try
+            get
             {
-                // 关闭旧连接
-                _stream?.Close();
-                _tcpClient?.Close();
+                try
+                {
+                    if (_tcpClient == null || !_tcpClient.Connected)
+                        return false;
+                    // Socket.Poll: 可读且无数据 → 连接已关闭（收到 FIN/RST）
+                    if (_tcpClient.Client.Poll(0, SelectMode.SelectRead))
+                        return _tcpClient.Client.Available > 0;
+                    return true;
+                }
+                catch
+                {
+                    return false;
+                }
             }
-            catch { }
-
-            // 替换为新连接
-            _tcpClient = newTcpClient;
-            _stream = newTcpClient.GetStream();
-            _reader = new StreamReader(_stream, Encoding.UTF8);
-            _writer = new StreamWriter(_stream, Encoding.UTF8);
-            _writer.AutoFlush = true;
-            _isRunning = true;
-            LastActivityTime = DateTime.UtcNow;
-
-            // 重启接收线程
-            _receiveThread = new Thread(ReceiveLoop);
-            _receiveThread.IsBackground = true;
-            _receiveThread.Start();
         }
 
         /// <summary>

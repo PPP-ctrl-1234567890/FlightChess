@@ -11,7 +11,7 @@ using Newtonsoft.Json.Linq;
 namespace FlightChess.Server
 {
     /// <summary>
-    /// 飞行棋游戏服务器，负责接受客户端连接、处理消息、维护游戏状态并广播更新。
+    /// 飞行棋游戏服务器：接受连接、处理消息、维护游戏状态并广播更新。
     /// </summary>
     public class GameServer
     {
@@ -19,32 +19,26 @@ namespace FlightChess.Server
         private Thread _acceptThread;
         private bool _isRunning;
 
-        /// <summary>所有客户端连接（加锁访问）</summary>
         private readonly object _clientsLock = new object();
         private List<ClientConnection> _clients;
 
-        /// <summary>游戏状态锁</summary>
         private readonly object _gameStateLock = new object();
         private GameState _gameState;
 
-        /// <summary>日志列表锁</summary>
         private readonly object _logLock = new object();
         private List<string> _logMessages;
 
-        /// <summary>游戏引擎</summary>
         private FlightChessEngine _engine;
 
-        // ========== AI 托管 ==========
+        // AI 托管
         private System.Timers.Timer _aiTimer;
         private Random _aiRng;
 
-        // ========== 心跳检测 ==========
+        // 心跳检测
         private System.Timers.Timer _heartbeatTimer;
 
-        // ========== 重连机制 ==========
-        /// <summary>重连宽限期（玩家断线后在此时间内允许重连）</summary>
+        // 重连宽限期
         private Dictionary<int, DateTime> _reconnectGracePeriods;
-        /// <summary>宽限期检查定时器</summary>
         private System.Timers.Timer _graceCheckTimer;
 
         public GameServer()
@@ -57,9 +51,7 @@ namespace FlightChess.Server
             _reconnectGracePeriods = new Dictionary<int, DateTime>();
         }
 
-        /// <summary>
-        /// 启动服务器，开始监听。
-        /// </summary>
+        /// <summary>启动服务器，开始监听指定端口。</summary>
         public void Start(int port = 8888)
         {
             _listener = new TcpListener(IPAddress.Any, port);
@@ -88,13 +80,12 @@ namespace FlightChess.Server
             _graceCheckTimer.Start();
         }
 
-        /// <summary>
-        /// 停止服务器
-        /// </summary>
+        /// <summary>停止服务器，释放所有资源。</summary>
         public void Stop()
         {
             _isRunning = false;
             StopAI();
+            try { _aiTimer?.Stop(); _aiTimer?.Dispose(); } catch { }
             try { _heartbeatTimer?.Stop(); _heartbeatTimer?.Dispose(); } catch { }
             try { _graceCheckTimer?.Stop(); _graceCheckTimer?.Dispose(); } catch { }
             try { _listener?.Stop(); } catch { }
@@ -109,9 +100,7 @@ namespace FlightChess.Server
             }
         }
 
-        /// <summary>
-        /// 接受客户端连接循环（不预分配玩家 ID，由 JoinGame/Reconnect 消息决定）
-        /// </summary>
+        /// <summary>接受客户端连接循环，玩家 ID 由 JoinGame/Reconnect 消息分配。</summary>
         private void AcceptClientsLoop()
         {
             while (_isRunning)
@@ -205,9 +194,7 @@ namespace FlightChess.Server
         }
 
         /// <summary>
-        /// 处理加入游戏请求（无空位时自动尝试按玩家名重连）。
-        /// 扫描空位与标记占用在同一个锁内完成，消除 TOCTOU 竞态窗口，
-        /// 杜绝两个客户端被分配到同一个槽位的 bug。
+        /// 处理加入游戏请求。扫描空位与标记占用在同一锁内完成，消除 TOCTOU 竞态。
         /// </summary>
         private void HandleJoinGame(ClientConnection sender, string json)
         {
@@ -218,45 +205,41 @@ namespace FlightChess.Server
             }
 
             JoinGameMessage msg = JsonConvert.DeserializeObject<JoinGameMessage>(json);
-            string playerName = string.IsNullOrWhiteSpace(msg.PlayerName)
-                ? "玩家"
-                : msg.PlayerName;
+            string playerName = msg.PlayerName;
 
-            // === 第 1 步：在 _gameStateLock 下扫描空位并立即标记占用 ===
-            // 关键：扫描和标记必须在同一个临界区内，否则两个并发 JoinGame
-            // 可能扫到同一个空槽，导致两个客户端被分配到相同的 PlayerId。
+            // 步骤1：在 _gameStateLock 下扫描空位并立即标记占用
             int assignedId = -1;
             bool isReconnect = false;
+            bool caseBReconnect = false;  // true=同名玩家仍显示在线，需额外验证旧连接是否存活
             GameStateUpdateMessage broadcastMsg = null;
 
             lock (_gameStateLock)
             {
-                // 第 1 遍：找同名玩家走重连
-                // 情况A：已断线（无论宽限期是否过期）→ 正常重连
-                // 情况B：仍显示已连接（服务器未检测到断线）→ 强制断开旧连接重连
+                // 第一遍：找同名玩家走重连
                 for (int i = 0; i < 4; i++)
                 {
                     var p = _gameState.Players[i];
                     if (!p.HasJoined || p.Name != playerName)
                         continue;
 
-                    // A：已断线 → 始终允许重连（宽限期仅影响日志/AI，不阻塞重连）
                     if (!p.IsConnected)
                     {
+                        // 已断线 → 直接重连
                         assignedId = i;
                         isReconnect = true;
                         break;
                     }
-                    // B：仍显示已连接（服务器尚未检测到 TCP 断开）
                     if (p.IsConnected)
                     {
+                        // 仍显示在线 → 标记待验证（防止同名抢占）
                         assignedId = i;
                         isReconnect = true;
+                        caseBReconnect = true;
                         break;
                     }
                 }
 
-                // 第 2 遍：没有匹配的重连 → 找从未加入过的空位并立即占用
+                // 第二遍：无匹配重连 → 找从未加入的空位
                 if (!isReconnect)
                 {
                     for (int i = 0; i < 4; i++)
@@ -264,10 +247,11 @@ namespace FlightChess.Server
                         if (!_gameState.Players[i].HasJoined)
                         {
                             assignedId = i;
-                            // 立即标记为已占用（锁内！其他线程扫描时将跳过此槽）
                             sender.PlayerId = i;
                             sender.IsInitialized = true;
                             var player = _gameState.Players[i];
+                            if (string.IsNullOrWhiteSpace(playerName))
+                                playerName = "Player" + (i + 1);
                             player.Name = playerName;
                             player.IsConnected = true;
                             player.HasJoined = true;
@@ -284,15 +268,15 @@ namespace FlightChess.Server
                 }
                 else
                 {
-                    // 重连路径：在锁内恢复连接状态
+                    // 重连路径：恢复连接状态，停止 AI 托管
                     _reconnectGracePeriods.Remove(assignedId);
                     sender.PlayerId = assignedId;
                     sender.IsInitialized = true;
                     var player = _gameState.Players[assignedId];
                     player.IsConnected = true;
-                    player.Name = playerName;
+                    if (!string.IsNullOrWhiteSpace(playerName))
+                        player.Name = playerName;
 
-                    // 如果 AI 正在为该玩家托管，立即停止
                     StopAI();
 
                     AddLog(string.Format("{0} 重新连接了游戏。", playerName));
@@ -302,7 +286,27 @@ namespace FlightChess.Server
                 }
             }
 
-            // === 第 2 步：房间满 → 拒绝连接（锁外发送 I/O） ===
+            // 步骤2：caseB 校验 —— 确认旧连接确已断开
+            if (caseBReconnect && assignedId >= 0)
+            {
+                ClientConnection oldConn = null;
+                lock (_clientsLock)
+                {
+                    oldConn = _clients.Find(c =>
+                        c != sender && c.PlayerId == assignedId && c.IsInitialized);
+                }
+                if (oldConn != null && oldConn.IsSocketConnected)
+                {
+                    // 旧连接仍存活 → 名字冲突
+                    SendError(sender, string.Format(
+                        "名称 \"{0}\" 已被使用，请更换名称后重试。", playerName));
+                    sender.Stop();
+                    lock (_clientsLock) { _clients.Remove(sender); }
+                    return;
+                }
+            }
+
+            // 步骤3：房间满 → 拒绝
             if (assignedId < 0)
             {
                 SendError(sender, "房间已满，且没有匹配的断线玩家。");
@@ -311,9 +315,7 @@ namespace FlightChess.Server
                 return;
             }
 
-            // === 第 3 步：重连 → 清理旧连接（_clientsLock 优先，避免 ABBA 死锁） ===
-            // ★ 关键：sender.PlayerId 已在第 1 步设置为 assignedId，
-            //   因此必须排除 sender，否则会误将自己的连接清理掉！
+            // 步骤4：重连时清理旧连接（需排除 sender，避免误清自身）
             if (isReconnect)
             {
                 ClientConnection oldConn = null;
@@ -330,7 +332,7 @@ namespace FlightChess.Server
                 }
             }
 
-            // === 第 4 步：发送响应和广播 ===
+            // 步骤5：发送响应并广播
             sender.SendMessage(new JoinGameResponseMessage { PlayerId = assignedId });
             if (broadcastMsg != null)
                 BroadcastMessage(broadcastMsg);
@@ -338,8 +340,7 @@ namespace FlightChess.Server
         }
 
         /// <summary>
-        /// 处理掷骰子请求 — 所有校验在锁内完成，错误收集后在锁外发送，消除阻塞锁的 I/O。
-        /// 广播快照在锁内制备，确保"修改→广播"原子性，避免定时器回调在中间窗口修改状态。
+        /// 处理掷骰子请求。校验在锁内完成，错误在锁外发送；广播快照在锁内制备。
         /// </summary>
         private void HandleRollDice(ClientConnection sender)
         {
@@ -349,7 +350,6 @@ namespace FlightChess.Server
                 return;
             }
 
-            // 延迟发送的错误（锁外发送，避免阻塞 _gameStateLock）
             string deferredError = null;
             bool noValidMoves = false;
             GameStateUpdateMessage broadcastMsg = null;
@@ -360,25 +360,14 @@ namespace FlightChess.Server
                 curPlayerId = sender.PlayerId;
 
                 if (_gameState.GameOver)
-                {
                     deferredError = "游戏已经结束。";
-                }
                 else if (curPlayerId != _gameState.CurrentPlayerIndex)
-                {
                     deferredError = "还没轮到你。";
-                }
                 else if (_gameState.DiceValue != 0)
-                {
                     deferredError = "你已经掷过骰子了，请先移动棋子。";
-                }
 
-                if (deferredError != null)
+                if (deferredError == null)
                 {
-                    // 不在锁内发送错误 — 提前退出，不留不一致状态
-                }
-                else
-                {
-                    // 掷骰子
                     int diceValue = _engine.RollDice();
                     _gameState.DiceValue = diceValue;
 
@@ -386,7 +375,6 @@ namespace FlightChess.Server
                     AddLog(string.Format("{0} 掷出了 {1} 点。", playerName, diceValue));
                     Console.WriteLine("[掷] {0} → {1}", CN(curPlayerId), diceValue);
 
-                    // 检查是否有合法移动
                     var validMoves = _engine.GetValidMoves(
                         _gameState.Players[curPlayerId], diceValue);
 
@@ -397,12 +385,10 @@ namespace FlightChess.Server
                         AddLog(string.Format("{0} 没有棋子可以移动，轮到下一家。", playerName));
                     }
 
-                    // 在锁内制备广播快照，保证与修改一致（消除 TOCTOU 窗口）
                     broadcastMsg = CaptureGameStateUpdate();
                 }
             }
 
-            // === 锁外：发送错误或广播状态 ===
             if (deferredError != null)
             {
                 SendError(sender, deferredError);
@@ -444,9 +430,7 @@ namespace FlightChess.Server
             }
         }
 
-        /// <summary>
-        /// 处理移动棋子请求 — 校验在锁内完成，错误在锁外发送。
-        /// </summary>
+        /// <summary>处理移动棋子请求。校验在锁内完成，错误在锁外发送。</summary>
         private void HandleMovePiece(ClientConnection sender, string json)
         {
             if (!sender.IsInitialized)
@@ -477,19 +461,15 @@ namespace FlightChess.Server
 
                 if (deferredError == null)
                 {
-                    // 验证移动合法性
                     var validMoves = _engine.GetValidMoves(
                         _gameState.Players[sender.PlayerId], _gameState.DiceValue);
 
                     if (!validMoves.Contains(msg.PieceIndex))
-                    {
                         deferredError = "该棋子当前无法移动。";
-                    }
                 }
 
                 if (deferredError == null)
                 {
-                    // 执行移动
                     MoveResult result = _engine.MovePiece(_gameState, sender.PlayerId, msg.PieceIndex);
 
                     if (!result.Success)
@@ -504,7 +484,6 @@ namespace FlightChess.Server
                         Console.WriteLine("[移] {0} 棋{1}: {2}", CN(sender.PlayerId),
                             msg.PieceIndex + 1, result.Message);
 
-                        // 处理后续
                         if (result.GameOver)
                         {
                             AddLog("所有玩家均已完成归营，游戏结束！");
@@ -523,13 +502,11 @@ namespace FlightChess.Server
                             _gameState.DiceValue = 0;
                         }
 
-                        // 在锁内制备广播快照
                         broadcastMsg = CaptureGameStateUpdate();
                     }
                 }
             }
 
-            // === 锁外：发送错误或广播 ===
             if (deferredError != null)
             {
                 SendError(sender, deferredError);
@@ -539,12 +516,10 @@ namespace FlightChess.Server
             if (broadcastMsg != null)
                 BroadcastMessage(broadcastMsg);
 
-            CheckAndTriggerAI();  // 检查下一位玩家是否需要 AI 托管
+            CheckAndTriggerAI();
         }
 
-        /// <summary>
-        /// 处理重新开始游戏请求 — 重置所有棋子，保留玩家连接
-        /// </summary>
+        /// <summary>处理重置游戏请求。重置所有棋子，保留玩家连接状态。</summary>
         private void HandleResetGame(ClientConnection sender)
         {
             string deferredError = null;
@@ -558,14 +533,21 @@ namespace FlightChess.Server
                 }
                 else
                 {
-                    // 重置游戏状态
                     for (int i = 0; i < 4; i++)
                     {
                         bool wasConnected = _gameState.Players[i].IsConnected;
+                        bool hadJoined = _gameState.Players[i].HasJoined;
                         string name = _gameState.Players[i].Name;
                         _gameState.Players[i] = new Common.Player(i, name,
                             FlightChessEngine.PlayerStartOffsets[i]);
                         _gameState.Players[i].IsConnected = wasConnected;
+                        _gameState.Players[i].HasJoined = hadJoined;
+                    }
+                    _gameState.ConnectedPlayerCount = 0;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        if (_gameState.Players[i].IsConnected)
+                            _gameState.ConnectedPlayerCount++;
                     }
                     _gameState.CurrentPlayerIndex = 0;
                     _gameState.DiceValue = 0;
@@ -588,12 +570,10 @@ namespace FlightChess.Server
             if (broadcastMsg != null)
                 BroadcastMessage(broadcastMsg);
 
-            CheckAndTriggerAI();  // 重置后检查首玩家是否需要 AI
+            CheckAndTriggerAI();
         }
 
-        /// <summary>
-        /// 处理断线重连请求 — 在宽限期内将新 TCP 连接关联到原玩家
-        /// </summary>
+        /// <summary>处理断线重连请求。将新 TCP 连接关联到原玩家槽位。</summary>
         private void HandleReconnect(ClientConnection sender, string json)
         {
             ReconnectMessage msg = JsonConvert.DeserializeObject<ReconnectMessage>(json);
@@ -634,18 +614,17 @@ namespace FlightChess.Server
             ClientConnection oldConn = null;
             lock (_clientsLock)
             {
-                oldConn = _clients.Find(c => c.PlayerId == targetPid);
+                oldConn = _clients.Find(c => c != sender && c.PlayerId == targetPid);
                 if (oldConn != null)
                     _clients.Remove(oldConn);
             }
 
             if (oldConn != null)
             {
-                oldConn.PlayerId = -1; // 防止 OnClientDisconnected 错误修改已重连玩家的状态
+                oldConn.PlayerId = -1;
                 oldConn.Stop();
             }
 
-            // 更新游戏状态
             GameStateUpdateMessage broadcastMsg = null;
             lock (_gameStateLock)
             {
@@ -656,13 +635,13 @@ namespace FlightChess.Server
 
                 var player = _gameState.Players[targetPid];
                 player.IsConnected = true;
-                player.Name = msg.PlayerName;
+                if (!string.IsNullOrWhiteSpace(msg.PlayerName))
+                    player.Name = msg.PlayerName;
 
                 string name = player.Name;
                 AddLog(string.Format("{0} 重新连接了游戏。", name));
                 Console.WriteLine("[+] {0}({1}) 重连成功", CN(targetPid), name);
 
-                // 如果 AI 正在为该玩家托管，立即停止
                 StopAI();
 
                 broadcastMsg = CaptureGameStateUpdate();
@@ -676,16 +655,13 @@ namespace FlightChess.Server
             CheckAndTriggerAI();
         }
 
-        /// <summary>
-        /// 处理聊天消息 — 直接广播给所有客户端
-        /// </summary>
+        /// <summary>处理聊天消息，用服务器端玩家名覆盖后广播。</summary>
         private void HandleChatMessage(ClientConnection sender, string json)
         {
             ChatMessage msg = JsonConvert.DeserializeObject<ChatMessage>(json);
             if (msg == null || string.IsNullOrWhiteSpace(msg.Content))
                 return;
 
-            // 用发送者连接中的玩家名覆盖（防止客户端伪造）
             lock (_gameStateLock)
             {
                 if (sender.PlayerId >= 0 && sender.PlayerId < 4)
@@ -696,14 +672,10 @@ namespace FlightChess.Server
             AddLog(logMsg);
             Console.WriteLine("[聊] {0}: {1}", CN(sender.PlayerId), msg.Content);
 
-            // 广播给所有已初始化的客户端（包括发送者）
             BroadcastMessage(msg);
         }
 
-        /// <summary>
-        /// 客户端断开连接时的处理。
-        /// 立即标记断线并开启 30 秒重连宽限期。AI 在 CheckAndTriggerAI 中立即接管。
-        /// </summary>
+        /// <summary>客户端断开连接时调用。标记断线、启动宽限期、AI 立即接管。</summary>
         public void OnClientDisconnected(ClientConnection client)
         {
             lock (_clientsLock)
@@ -713,21 +685,18 @@ namespace FlightChess.Server
 
             int playerIndex = client.PlayerId;
 
-            // 未分配 ID 的连接无需后续处理
             if (playerIndex < 0 || playerIndex >= 4)
             {
                 client.Stop();
                 return;
             }
 
-            // ★ 安全检查：是否已有新连接接管了此玩家？
-            //   （HandleJoinGame/HandleReconnect 可能在清理旧连接之前就已设置了新连接的 PlayerId）
+            // 安全检查：是否已有新连接接管了此玩家？
             lock (_clientsLock)
             {
                 var replacement = _clients.Find(c => c != client && c.PlayerId == playerIndex && c.IsInitialized);
                 if (replacement != null)
                 {
-                    // 新连接已接管此玩家，跳过断线处理
                     Console.WriteLine("[-] {0}({1}) 旧连接断开，但已有新连接接管，跳过处理", CN(playerIndex), playerIndex);
                     client.Stop();
                     return;
@@ -750,10 +719,8 @@ namespace FlightChess.Server
                 playerName = player.Name;
                 player.IsConnected = false;
 
-                // 记录断线时间（30 秒宽限期，用于保证重连优先权）
                 _reconnectGracePeriods[playerIndex] = DateTime.UtcNow;
 
-                // 如果离开的是当前玩家，切换到下一个（让游戏继续，但 AI 暂不接管）
                 if (_gameState.CurrentPlayerIndex == playerIndex && !_gameState.GameOver)
                 {
                     _gameState.CurrentPlayerIndex = _engine.GetNextPlayerIndex(_gameState);
@@ -761,14 +728,13 @@ namespace FlightChess.Server
                     turnPassed = true;
                 }
 
-                // 在锁内制备广播快照
                 broadcastMsg = CaptureGameStateUpdate();
             }
 
-            string logMsg = string.Format("{0} 掉线了（AI接管，30秒内可重连）{1}",
+            string logMsg = string.Format("{0} 掉线了（AI接管，可随时重连）{1}",
                 playerName, turnPassed ? "，跳过其回合。" : "");
             AddLog(logMsg);
-            Console.WriteLine("[-] {0}({1}) → 掉线，AI接管（30秒内可重连）", CN(playerIndex), playerName);
+            Console.WriteLine("[-] {0}({1}) → 掉线，AI接管（可随时重连）", CN(playerIndex), playerName);
 
             // 广播玩家离开消息，CheckAndTriggerAI 立即接管
             PlayerLeftMessage leftMsg = new PlayerLeftMessage
@@ -782,33 +748,22 @@ namespace FlightChess.Server
                 BroadcastMessage(broadcastMsg);
             CheckAndTriggerAI();
 
-            // ★ 将 PlayerId 置为 -1，防止 client.Stop() 触发 ReceiveLoop.finally
-            //    再次调用 OnClientDisconnected 时重复处理
             client.PlayerId = -1;
             client.Stop();
         }
 
-        /// <summary>
-        /// 向单个客户端发送错误消息
-        /// </summary>
         private void SendError(ClientConnection client, string message)
         {
             ErrorMessage errorMsg = new ErrorMessage { Message = message };
             client.SendMessage(errorMsg);
         }
 
-        /// <summary>
-        /// 向所有客户端广播游戏状态
-        /// </summary>
         private void BroadcastGameState()
         {
             BroadcastMessage(CaptureGameStateUpdate());
         }
 
-        /// <summary>
-        /// 在已持有 _gameStateLock 的情况下制备 GameStateUpdate 消息快照。
-        /// 将 DeepCopy + 日志复制合并为一次锁内操作，消除 TOCTOU 窗口。
-        /// </summary>
+        /// <summary>制备 GameStateUpdate 快照（需持有 _gameStateLock）。</summary>
         private GameStateUpdateMessage CaptureGameStateUpdate()
         {
             string[] logsCopy;
@@ -823,9 +778,7 @@ namespace FlightChess.Server
             };
         }
 
-        /// <summary>
-        /// 向所有已初始化的客户端广播消息
-        /// </summary>
+        /// <summary>向所有已初始化的客户端广播消息。</summary>
         private void BroadcastMessage(object message)
         {
             List<ClientConnection> snapshot;
@@ -843,9 +796,7 @@ namespace FlightChess.Server
             }
         }
 
-        /// <summary>
-        /// 调试命令：强制指定玩家获胜，其他已连接玩家自动排名
-        /// </summary>
+        /// <summary>调试命令：强制指定玩家获胜。</summary>
         public void ForceWin(int playerIndex)
         {
             if (playerIndex < 0 || playerIndex > 3) return;
@@ -882,9 +833,7 @@ namespace FlightChess.Server
                 BroadcastMessage(broadcastMsg);
         }
 
-        /// <summary>
-        /// 调试命令：触发踩子炸裂动画 — 让 kicker 的棋子踩 kicked 的棋子
-        /// </summary>
+        /// <summary>调试命令：触发踩子动画。</summary>
         public void ForceKick(int kickerIdx, int kickedIdx)
         {
             if (kickerIdx < 0 || kickerIdx > 3 || kickedIdx < 0 || kickedIdx > 3) return;
@@ -970,13 +919,9 @@ namespace FlightChess.Server
                 BroadcastMessage(broadcastMsg);
         }
 
-        // =================================================================
-        //  心跳检测 & 重连宽限期
-        // =================================================================
+        // 心跳检测 & 重连宽限期
 
-        /// <summary>
-        /// 心跳检测定时器：每 5 秒向所有已初始化客户端发送 Ping，检查超时（15 秒无响应则断开）
-        /// </summary>
+        /// <summary>心跳定时器：每 5 秒 Ping 所有客户端，15 秒无响应则断开。</summary>
         private void HeartbeatTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             try
@@ -984,14 +929,12 @@ namespace FlightChess.Server
                 var now = DateTime.UtcNow;
                 const double timeoutSeconds = 15.0;
 
-                // 在锁外快照已初始化的客户端，避免 SendMessage（可能阻塞 I/O）占用锁
                 List<ClientConnection> snapshot;
                 lock (_clientsLock)
                 {
                     snapshot = _clients.Where(c => c.IsInitialized).ToList();
                 }
 
-                // 逐个发送 Ping 并检查超时（不持 _clientsLock）
                 var staleClients = new List<ClientConnection>();
                 foreach (var client in snapshot)
                 {
@@ -1014,10 +957,7 @@ namespace FlightChess.Server
             }
         }
 
-        /// <summary>
-        /// 重连宽限期检查：每 5 秒检查一次，超过 30 秒无重连则移除宽限期。
-        /// AI 已在断线时立即接管，宽限期仅保留重连优先权。
-        /// </summary>
+        /// <summary>宽限期定时器：每 5 秒检查，超过 30 秒未重连则移除宽限期。</summary>
         private void GraceCheckTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             try
@@ -1028,14 +968,11 @@ namespace FlightChess.Server
 
                 lock (_gameStateLock)
                 {
-                    // 处理已过期的宽限期
                     var expired = new List<int>();
                     foreach (var kvp in _reconnectGracePeriods)
                     {
                         if ((now - kvp.Value).TotalSeconds >= 30.0)
-                        {
                             expired.Add(kvp.Key);
-                        }
                     }
 
                     foreach (var pid in expired)
@@ -1043,12 +980,9 @@ namespace FlightChess.Server
                         _reconnectGracePeriods.Remove(pid);
                         string name = _gameState.Players[pid].Name;
                         AddLog(string.Format("{0} 的宽限期已过，不再保证重连。", name));
-                        Console.WriteLine("[-] {0}({1}) 宽限期已过 → 不再保证重连", CN(pid), name);
+                        Console.WriteLine("[-] {0}({1}) 宽限期已过", CN(pid), name);
                         anyExpired = true;
                     }
-
-                    // 注意：不再需要"安全网"跳过断线玩家 — AI 在 CheckAndTriggerAI 中立即接管
-                    // 保留宽限期过期的广播通知
 
                     if (anyExpired)
                         broadcastMsg = CaptureGameStateUpdate();
@@ -1057,7 +991,6 @@ namespace FlightChess.Server
                 if (broadcastMsg != null)
                 {
                     BroadcastMessage(broadcastMsg);
-                    // 任意状态变更后都重新评估 AI 需求
                     CheckAndTriggerAI();
                 }
             }
@@ -1067,14 +1000,10 @@ namespace FlightChess.Server
             }
         }
 
-        // =================================================================
-        //  控制台输出 & AI 托管
-        // =================================================================
+        // 控制台输出 & AI 托管
 
-        /// <summary>控制台使用的玩家简称（红/绿/黄/蓝）</summary>
         private static string CN(int idx) => FlightChessEngine.PlayerColorNames[idx];
 
-        /// <summary>检查是否还有任何人类玩家保持连接</summary>
         private bool HasAnyConnectedPlayer()
         {
             lock (_gameStateLock)
@@ -1088,10 +1017,10 @@ namespace FlightChess.Server
             return false;
         }
 
-        /// <summary>检查当前玩家是否需要 AI 托管或跳过回合</summary>
+        /// <summary>检查当前玩家是否需要 AI 托管或跳过。</summary>
         private void CheckAndTriggerAI()
         {
-            while (true) // 循环跳过从未加入的玩家，断线玩家触发 AI 接管
+            while (true)
             {
                 if (!HasAnyConnectedPlayer())
                 {
@@ -1102,7 +1031,7 @@ namespace FlightChess.Server
 
                 bool needsAI = false;
                 bool shouldContinue = false;
-                int aiPlayer = -1;  // 在锁内捕获，防止锁外读取 CurrentPlayerIndex 的竞态
+                int aiPlayer = -1;
 
                 lock (_gameStateLock)
                 {
@@ -1111,7 +1040,6 @@ namespace FlightChess.Server
 
                     var cp = _gameState.Players[_gameState.CurrentPlayerIndex];
 
-                    // 从未加入的玩家：直接跳过（不触发 AI，不进入宽限期等待）
                     if (!cp.HasJoined)
                     {
                         string name = cp.Name;
@@ -1125,17 +1053,15 @@ namespace FlightChess.Server
                     }
                     else if (!cp.IsConnected && cp.Rank == 0)
                     {
-                        // 断线即 AI 接管，不再等待宽限期
-                        // 宽限期仅用于保证"同名重连"的优先权（30秒内可重连取代 AI）
                         needsAI = true;
-                        aiPlayer = _gameState.CurrentPlayerIndex; // 锁内捕获
+                        aiPlayer = _gameState.CurrentPlayerIndex;
                     }
                 }
 
                 if (shouldContinue)
                 {
                     BroadcastGameState();
-                    continue; // 检查下一位玩家
+                    continue;
                 }
 
                 if (needsAI)
@@ -1150,11 +1076,10 @@ namespace FlightChess.Server
                     _aiTimer.Start();
                     Console.WriteLine("[AI] 定时器已启动，1.2秒后接管 {0}", CN(aiPlayer));
                 }
-                break; // 正常（有 AI 或无需 AI）→ 退出循环
+                break;
             }
         }
 
-        /// <summary>格式化位置变化为简洁描述（用于控制台）</summary>
         private static string FmtPos(int oldPos, int newPos)
         {
             if (oldPos == -1) return "起飞";
@@ -1163,7 +1088,6 @@ namespace FlightChess.Server
             return string.Format("{0}→{1}", oldPos, newPos);
         }
 
-        /// <summary>格式化移动附加效果（踩子/飞跃/同色跳/回退/6点）</summary>
         private static string FmtFx(MoveResult result)
         {
             string fx = "";
@@ -1176,7 +1100,7 @@ namespace FlightChess.Server
             return fx;
         }
 
-        /// <summary>AI 定时器回调：执行一次掷骰或移动操作</summary>
+        /// <summary>AI 定时器回调：执行掷骰或移动操作。</summary>
         private void OnAITimerElapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             try
@@ -1192,7 +1116,7 @@ namespace FlightChess.Server
                 bool shouldContinue = false;
                 bool noValidMoves = false;
                 GameStateUpdateMessage broadcastMsg = null;
-                int aiPlayerId;  // 锁内捕获
+                int aiPlayerId;
 
                 lock (_gameStateLock)
                 {
@@ -1202,7 +1126,6 @@ namespace FlightChess.Server
                     int curIdx = _gameState.CurrentPlayerIndex;
                     var player = _gameState.Players[curIdx];
 
-                    // 玩家已重连 / 已归营 / 从未加入 → 退出
                     if (player.IsConnected || player.Rank > 0 || !player.HasJoined)
                         return;
 
@@ -1210,7 +1133,7 @@ namespace FlightChess.Server
 
                     if (_gameState.DiceValue == 0)
                     {
-                        // === 阶段 1：掷骰子 ===
+                        // 阶段1：掷骰子
                         int dice = _engine.RollDice();
                         _gameState.DiceValue = dice;
 
@@ -1220,10 +1143,8 @@ namespace FlightChess.Server
 
                         if (validMoves.Count == 0)
                         {
-                            // ★ 先广播骰子值（客户端需要看到点数），再由定时器跳过回合
                             AddLog(string.Format("[AI] {0} 没有棋子可以移动，轮到下一家。", player.Name));
                             Console.WriteLine("[AI] {0} 掷{1}, 无棋可移→跳过", CN(curIdx), dice);
-
                             noValidMoves = true;
                         }
                         else
@@ -1237,7 +1158,7 @@ namespace FlightChess.Server
                     }
                     else
                     {
-                        // === 阶段 2：随机选择合法移动 ===
+                        // 阶段2：随机选择合法移动
                         var validMoves = _engine.GetValidMoves(player, _gameState.DiceValue);
                         if (validMoves.Count > 0)
                         {
@@ -1248,11 +1169,9 @@ namespace FlightChess.Server
                             MoveResult result = _engine.MovePiece(_gameState, curIdx, pieceIdx);
                             int newPos = player.Pieces[pieceIdx];
 
-                            // 客户端日志：完整信息
                             AddLog(string.Format("[AI] {0} 移动棋子 {1}：{2}",
                                 player.Name, pieceNum, result.Message));
 
-                            // 控制台：简洁输出
                             Console.WriteLine("[AI] {0} 棋{1}: {2}{3}",
                                 CN(curIdx), pieceNum, FmtPos(oldPos, newPos), FmtFx(result));
 
@@ -1284,7 +1203,6 @@ namespace FlightChess.Server
                 if (shouldBroadcast && broadcastMsg != null)
                     BroadcastMessage(broadcastMsg);
 
-                // ★ 无合法移动时，延迟后跳过回合（与人类玩家流程一致）
                 if (noValidMoves)
                 {
                     int capturedPlayer = aiPlayerId;
@@ -1314,7 +1232,7 @@ namespace FlightChess.Server
                         skipTimer.Dispose();
                     };
                     skipTimer.Start();
-                    return;  // ★ 不立即调用 CheckAndTriggerAI，等待定时器
+                    return;
                 }
 
                 if (shouldContinue)
@@ -1327,15 +1245,11 @@ namespace FlightChess.Server
             }
         }
 
-        /// <summary>停止 AI 托管定时器</summary>
         private void StopAI()
         {
             try { _aiTimer?.Stop(); } catch { }
         }
 
-        /// <summary>
-        /// 添加日志
-        /// </summary>
         private void AddLog(string message)
         {
             string timestamp = DateTime.Now.ToString("HH:mm:ss");

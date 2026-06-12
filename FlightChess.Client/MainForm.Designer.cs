@@ -10,10 +10,9 @@ namespace FlightChess.Client
         // ---- 控件字段 ----
         private System.Windows.Forms.Panel topPanel;
         private System.Windows.Forms.Label lblCurrentPlayer, lblDiceValue;
-        private System.Windows.Forms.Button btnRollDice, btnReset;
+        private System.Windows.Forms.Button btnRollDice;
         private System.Windows.Forms.Panel boardPanel;
         private System.Windows.Forms.ListBox lstLog;
-        private System.Windows.Forms.ToolTip _toolTip;
         private System.Windows.Forms.GroupBox chatPanel;
         private System.Windows.Forms.RichTextBox rtbChat;
         private System.Windows.Forms.FlowLayoutPanel flpChatButtons;
@@ -38,12 +37,10 @@ namespace FlightChess.Client
         private void InitializeComponent()
         {
             this.components = new System.ComponentModel.Container();
-            this._toolTip = new System.Windows.Forms.ToolTip(this.components);
             this.topPanel = new System.Windows.Forms.Panel();
             this.lblCurrentPlayer = new System.Windows.Forms.Label();
             this.lblDiceValue = new System.Windows.Forms.Label();
             this.btnRollDice = new System.Windows.Forms.Button();
-            this.btnReset = new System.Windows.Forms.Button();
             this.boardPanel = new System.Windows.Forms.Panel();
             this.lstLog = new System.Windows.Forms.ListBox();
             this.chatPanel = new System.Windows.Forms.GroupBox();
@@ -60,7 +57,6 @@ namespace FlightChess.Client
             this.topPanel.Controls.Add(this.lblCurrentPlayer);
             this.topPanel.Controls.Add(this.lblDiceValue);
             this.topPanel.Controls.Add(this.btnRollDice);
-            this.topPanel.Controls.Add(this.btnReset);
             this.topPanel.Location = new System.Drawing.Point(10, 8);
             this.topPanel.Name = "topPanel";
             this.topPanel.Size = new System.Drawing.Size(910, 44);
@@ -100,17 +96,6 @@ namespace FlightChess.Client
             this.btnRollDice.Text = "掷骰子";
             this.btnRollDice.UseVisualStyleBackColor = false;
             //
-            // btnReset
-            //
-            this.btnReset.Enabled = false;
-            this.btnReset.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnReset.Font = new System.Drawing.Font("微软雅黑", 9F);
-            this.btnReset.Location = new System.Drawing.Point(580, 7);
-            this.btnReset.Name = "btnReset";
-            this.btnReset.Size = new System.Drawing.Size(60, 32);
-            this.btnReset.TabIndex = 3;
-            this.btnReset.Text = "重置";
-            //
             // boardPanel
             //
             this.boardPanel.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(248)))), ((int)(((byte)(242)))), ((int)(((byte)(225)))));
@@ -126,7 +111,7 @@ namespace FlightChess.Client
             this.lstLog.HorizontalScrollbar = true;
             this.lstLog.Location = new System.Drawing.Point(10, 765);
             this.lstLog.Name = "lstLog";
-            this.lstLog.Size = new System.Drawing.Size(910, 18);
+            this.lstLog.Size = new System.Drawing.Size(910, 100);
             this.lstLog.TabIndex = 2;
             //
             // chatPanel
@@ -167,12 +152,12 @@ namespace FlightChess.Client
             // MainForm
             //
             this.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(240)))), ((int)(((byte)(235)))), ((int)(((byte)(220)))));
-            this.ClientSize = new System.Drawing.Size(930, 785);
+            this.ClientSize = new System.Drawing.Size(930, 885);
             this.Controls.Add(this.topPanel);
             this.Controls.Add(this.boardPanel);
             this.Controls.Add(this.lstLog);
             this.Controls.Add(this.chatPanel);
-            this.MinimumSize = new System.Drawing.Size(930, 775);
+            this.MinimumSize = new System.Drawing.Size(930, 875);
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "飞行棋联机游戏";

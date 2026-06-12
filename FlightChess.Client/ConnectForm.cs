@@ -91,7 +91,7 @@ namespace FlightChess.Client
 
             txtPlayerName = new TextBox
             {
-                Text = "Player",
+                Text = "",
                 Location = new Point(115, 130),
                 Size = new Size(180, 25)
             };
@@ -145,8 +145,7 @@ namespace FlightChess.Client
 
             ServerPort = port;
             PlayerName = txtPlayerName.Text.Trim();
-            if (string.IsNullOrEmpty(PlayerName))
-                PlayerName = "Player";
+            // 空名由服务器自动分配 Player1~Player4
         }
     }
 }

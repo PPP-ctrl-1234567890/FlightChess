@@ -4,26 +4,17 @@ using System.Collections.Generic;
 namespace FlightChess.Common
 {
     /// <summary>
-    /// 移动操作的结果
+    /// 移动操作的结果。
     /// </summary>
     public class MoveResult
     {
-        /// <summary>操作是否成功</summary>
         public bool Success { get; set; }
-
-        /// <summary>结果描述消息</summary>
         public string Message { get; set; }
-
-        /// <summary>被踩回起点的棋子信息（玩家索引, 棋子索引）</summary>
+        /// <summary>被踩回基地的棋子信息（玩家索引, 棋子索引）</summary>
         public List<Tuple<int, int>> KickedPieces { get; set; }
-
-        /// <summary>是否获得额外回合（掷出 6 点且有合法移动）</summary>
+        /// <summary>是否获得额外回合（掷出 6 点）</summary>
         public bool ExtraTurn { get; set; }
-
-        /// <summary>游戏是否结束</summary>
         public bool GameOver { get; set; }
-
-        /// <summary>获胜玩家索引</summary>
         public int WinnerIndex { get; set; }
 
         public MoveResult()
@@ -38,54 +29,31 @@ namespace FlightChess.Common
     }
 
     /// <summary>
-    /// 飞行棋核心引擎，实现完整的飞行棋规则。
-    /// 棋子位置定义：
-    ///   -1 = 未起飞（在基地内）
-    ///   -2 = StartPosition（在 START 标记上，等待进入主路径）
-    ///    0~51 = 在主路径上前进了 N 步（从各自起点的偏移）
-    ///   52~57 = 在归营路径上（6 格，从外缘经臂中央通向中心）
-    ///   58 = GoalPosition（到达终点/完成）
-    ///
-    /// 任意棋子所在的绝对格子索引 = (玩家偏移 + 棋子步数位置) % 52（仅主路径0~51）
-    /// 安全格（绝对索引）：0, 13, 26, 39, 50
+    /// 飞行棋核心引擎。
+    /// 位置编码：-1=基地, -2=START, 0~51=主路径, 52~57=归营路径, 58=终点。
+    /// 绝对格子 = (玩家偏移 + 位置) % 52。安全格：{0,13,26,39,50}。
     /// </summary>
     public class FlightChessEngine
     {
-        /// <summary>棋盘主路径格子数</summary>
         public const int BoardSize = 52;
-
-        /// <summary>归营路径起始位置</summary>
         public const int FinishStart = 52;
-
-        /// <summary>归营路径结束位置（最后一格，恰好走到即完成）</summary>
         public const int FinishEnd = 57;
-
-        /// <summary>起点（START标记）位置</summary>
         public const int StartPosition = -2;
-
-        /// <summary>终点位置（完成）</summary>
         public const int GoalPosition = 58;
 
-        /// <summary>安全格（绝对格子索引），不会被踩</summary>
+        /// <summary>绝对格子索引上的安全格（不可被踩）</summary>
         public static readonly HashSet<int> SafeCells = new HashSet<int> { 0, 13, 26, 39, 50 };
 
-        /// <summary>四名玩家的起始偏移（红、绿、黄、蓝，逆时针顺序）</summary>
+        /// <summary>四名玩家的起始偏移（红绿黄蓝，逆时针）</summary>
         public static readonly int[] PlayerStartOffsets = { 0, 39, 26, 13 };
 
-        /// <summary>四名玩家的颜色名称（红、绿、黄、蓝）</summary>
+        /// <summary>四名玩家的颜色名称</summary>
         public static readonly string[] PlayerColorNames = { "红", "绿", "黄", "蓝" };
 
-        /// <summary>
-        /// 主路径格子颜色序列：绿(1)→红(0)→蓝(3)→黄(2) 循环。
-        /// 与客户端 MainForm._cellColorType 保持一致。
-        /// </summary>
+        /// <summary>主路径格子颜色序列：绿→红→蓝→黄，与客户端 _cellColorType 一致。</summary>
         private static readonly int[] ColorSeq = { 1, 0, 3, 2 };
 
-        /// <summary>
-        /// 获取主路径上指定步数位置的格子颜色类型。
-        /// </summary>
-        /// <param name="position">棋子步数位置（0~51）</param>
-        /// <returns>颜色类型：0=红, 1=绿, 2=黄, 3=蓝</returns>
+        /// <summary>获取主路径指定步数位置的格子颜色。0=红,1=绿,2=黄,3=蓝。</summary>
         public static int GetCellColorType(int position)
         {
             if (position < 0 || position >= BoardSize)
@@ -105,10 +73,7 @@ namespace FlightChess.Common
             _random = new Random(seed);
         }
 
-        /// <summary>
-        /// 将棋子的"步数位置"转换为绝对格子索引。
-        /// 仅对主路径位置（0~51）有效；未起飞、已到终点或归营路径返回 -1。
-        /// </summary>
+        /// <summary>步数位置→绝对格子索引。仅主路径(0~51)有效，否则返回-1。</summary>
         public static int ToAbsoluteIndex(int playerOffset, int piecePosition)
         {
             if (piecePosition < 0 || piecePosition >= BoardSize)
@@ -116,18 +81,12 @@ namespace FlightChess.Common
             return (playerOffset + piecePosition) % BoardSize;
         }
 
-        /// <summary>
-        /// 掷骰子，返回 1~6 的随机值。
-        /// </summary>
         public int RollDice()
         {
             return _random.Next(1, 7);
         }
 
-        /// <summary>
-        /// 获取当前骰子点数下，指定玩家可以移动的棋子索引列表。
-        /// 支持主路径、归营路径（含回退逻辑）。
-        /// </summary>
+        /// <summary>获取当前骰子点数下可移动的棋子索引列表。</summary>
         public List<int> GetValidMoves(Player player, int diceValue)
         {
             List<int> validMoves = new List<int>();
@@ -188,14 +147,7 @@ namespace FlightChess.Common
             return validMoves;
         }
 
-        /// <summary>
-        /// 执行移动操作。调用前应确保该移动合法。
-        /// 支持：起飞、主路径移动、进入归营路径、归营路径内移动与回退。
-        /// </summary>
-        /// <param name="gameState">当前游戏状态（会被修改）</param>
-        /// <param name="playerIndex">移动的玩家索引</param>
-        /// <param name="pieceIndex">移动的棋子索引（0~3）</param>
-        /// <returns>移动结果</returns>
+        /// <summary>执行移动操作。调用前应确保移动合法。</summary>
         public MoveResult MovePiece(GameState gameState, int playerIndex, int pieceIndex)
         {
             MoveResult result = new MoveResult();
@@ -218,7 +170,6 @@ namespace FlightChess.Common
 
             int currentPos = player.Pieces[pieceIndex];
 
-            // 已到终点
             if (currentPos == GoalPosition)
             {
                 result.Success = false;
@@ -255,7 +206,7 @@ namespace FlightChess.Common
                     return result;
                 }
 
-                // 若恰好到达 FinishEnd=57，直接完成（途经格子不触发踩子）
+                // 若恰好到达 FinishEnd=57，直接完成
                 if (newPos == FinishEnd)
                 {
                     player.Pieces[pieceIndex] = GoalPosition;
@@ -269,7 +220,6 @@ namespace FlightChess.Common
                     result.Success = true;
                     result.Message = string.Format("{0} 的棋子 {1} 从START进入主路径位置 {2}。",
                         player.Name, pieceIndex + 1, newPos);
-                    // ★ 仅在最终落点检查踩子，不检查途经格子
                     DoKickCheck(gameState, playerIndex, pieceIndex, result);
                 }
 
@@ -305,7 +255,6 @@ namespace FlightChess.Common
                     result.Success = true;
                     result.Message = string.Format("{0} 的棋子 {1} 从 {2} 移动到 {3}。",
                         player.Name, pieceIndex + 1, currentPos, newPos);
-                    // ★ 仅在最终落点检查踩子，不检查途经格子
                     DoKickCheck(gameState, playerIndex, pieceIndex, result);
                 }
 

@@ -14,13 +14,10 @@ using Newtonsoft.Json.Linq;
 
 namespace FlightChess.Client
 {
-    /// <summary>
-    /// 飞行棋联机游戏 — 传统十字环形棋盘，复古纸质印刷风格。
-    /// 52格外环路径，四角大本营，四条回营路径，中心四色拼接"机"字区。
-    /// </summary>
+    /// <summary>飞行棋联机游戏主窗体 — 十字环形棋盘，52格外环，四角大本营，四条回营路径。</summary>
     public partial class MainForm : Form
     {
-        // ========== 网络 ==========
+        // 网络
         private TcpClient _tcpClient;
         private NetworkStream _stream;
         private StreamReader _reader;
@@ -28,93 +25,73 @@ namespace FlightChess.Client
         private Thread _receiveThread;
         private bool _isConnected;
 
-        // ========== 心跳检测 ==========
+        // 心跳检测
         private DateTime _lastServerMsgTime;
         private System.Windows.Forms.Timer _heartbeatCheckTimer;
 
-        // ========== 断线重连 ==========
+        // 断线重连
         private bool _isReconnecting;
         private int _reconnectAttempts;
-        private const int MAX_RECONNECT_ATTEMPTS = 15; // 约 30 秒（间隔 2 秒）
+        private const int MAX_RECONNECT_ATTEMPTS = 15;
         private string _serverAddress;
         private int _serverPort;
         private Thread _reconnectThread;
 
-        // ========== 状态 ==========
+        // 游戏状态
         private GameState _currentGameState;
         private int _myPlayerId = -1;
         private string _myPlayerName;
         private readonly object _stateLock = new object();
 
-        // ========== 棋盘常数 ==========
+        // 棋盘常数
         private const int BdW = 700, BdH = 700;
-        private const int Inset = 40;                     // 路径距棋盘边缘的内缩
-        private const int CellSpacing = 1;                // 格子间距（紧挨）
-        private const int ArmW = 180;                     // 十字臂宽度
-        private const int CenterX = 310, CenterY = 310;   // 中心区块左上角（100×100，缩小为原来一半）
-        private const int CenterW = 100, CenterH = 100;   // 中心区块宽高（臂210px=5.25格，边100px=2.5格）
-        private const int BaseSize = 140;                  // 大本营尺寸
-        private const int BaseMargin = 30;                 // 大本营距边缘
+        private const int Inset = 40;
+        private const int CellSpacing = 1;
+        private const int ArmW = 180;
+        private const int CenterX = 310, CenterY = 310;
+        private const int CenterW = 100, CenterH = 100;
+        private const int BaseSize = 140;
+        private const int BaseMargin = 30;
 
-        // ========== 棋盘数据 ==========
-        /// <summary>52格外环格中心坐标</summary>
+        // 棋盘数据
         private PointF[] _gridPos;
-        /// <summary>外环格是否为转角格</summary>
         private bool[] _isCorner;
-        /// <summary>转角格的箭头方向角（弧度）</summary>
         private float[] _cornerAngle;
-        /// <summary>外环格的颜色类型 0=红 1=黄 2=蓝 3=绿 4=白</summary>
         private int[] _cellColorType;
-        /// <summary>4个大本营矩形</summary>
         private Rectangle[] _baseRects;
-        /// <summary>每个大本营4个棋位</summary>
         private Point[][] _baseSlots;
-        /// <summary>每个大本营START圆标位置</summary>
         private Point[] _startMarkers;
-        /// <summary>回营路径6格(每个玩家) — 索引52~57</summary>
         private PointF[][] _returnPathSpots;
-        /// <summary>回营路径段距离外环和中心的方向</summary>
         private PointF[][] _returnArrowDirs;
-        /// <summary>飞跃跳配对：[(fromAbs, toAbs)] 对应红绿黄蓝四名玩家</summary>
         private static readonly (int from, int to)[] _flightJumpPairs = {
-            (17, 29),  // 红: abs 17 → 29
-            (4, 16),   // 绿: abs 4 → 16
-            (43, 3),   // 黄: abs 43 → 3
-            (30, 42)   // 蓝: abs 30 → 42
+            (17, 29), (4, 16), (43, 3), (30, 42)
         };
-        /// <summary>金银铜牌位置（每个大本营旁边）</summary>
         private PointF[] _medalPositions;
-        /// <summary>中心四色区块矩形</summary>
         private Rectangle _centerRect;
         private Point _centerPt;
 
-        // 路径段定义（12段顺时针闭合多边形）
         private List<(PointF a, PointF b, float angle)> _segments;
 
         private int _hoverPlayer = -1, _hoverPiece = -1;
 
-        // ========== 动画 ==========
+        // 动画
         private System.Windows.Forms.Timer _animTimer;
         private int _animPlayer = -1, _animPiece = -1;
         private System.Collections.Generic.List<PointF> _animPath;
         private int _animPathIndex;
-        /// <summary>被踩棋子动画：在被踩回基地前短暂保留在棋盘原位</summary>
         private int _kickedPlayer = -1, _kickedPiece = -1;
         private PointF _kickedScreenPos;
 
-        // ========== 烟花特效 ==========
+        // 烟花 & 炸裂特效
         private System.Windows.Forms.Timer _fireworkTimer;
         private List<FireworkParticle> _fireworkParticles;
         private bool _fireworksActive;
         private int _fireworkBurstsLeft;
         private Random _fireworkRng;
-        private bool _victoryShown;  // 防止重复弹窗
-
-        // ========== 炸裂特效（踩子）==========
+        private bool _victoryShown;
         private List<FireworkParticle> _explosionParticles;
         private bool _explosionActive;
 
-        /// <summary>烟花粒子</summary>
         private class FireworkParticle
         {
             public float X, Y;
@@ -157,7 +134,6 @@ namespace FlightChess.Client
             Color.FromArgb(20, 70, 170),    // 蓝
         };
 
-        /// <summary>设计器用无参构造函数</summary>
         public MainForm()
         {
             _myPlayerName = "设计器";
@@ -167,21 +143,17 @@ namespace FlightChess.Client
         public MainForm(string server, int port, string name) : this()
         {
             _myPlayerName = name;
-            // ★ 强制创建窗口句柄，确保 BeginInvoke 可用 ★
-            // 必须在启动网络连接之前执行，否则服务器的 JoinGameResponse
-            // 会在窗体 Handle 创建前到达 → BeginInvoke 抛 InvalidOperationException
-            // → 消息被静默丢弃 → _myPlayerId 永远为 -1 → UI 永远显示"等待他人…"
+            // 必须提前创建窗口句柄，否则 JoinGameResponse 到达时 BeginInvoke 会失败
             if (!this.IsHandleCreated)
                 CreateHandle();
             ConnectToServer(server, port);
         }
 
-        /// <summary>两个构造函数共享的初始化逻辑</summary>
         private void CommonInit()
         {
             InitializeComponent();
             HookEvents();
-            // 双缓冲在运行时启用，设计时跳过（反射调用会破坏设计器解析器）
+            // 运行时启用双缓冲，设计时跳过（反射调用会破坏设计器）
             if (!DesignMode)
             {
                 typeof(Panel).GetProperty("DoubleBuffered",
@@ -195,27 +167,23 @@ namespace FlightChess.Client
             InitChatPanel();
         }
 
-        /// <summary>绑定所有控件事件（独立于设计器生成的 InitializeComponent，防止设计器覆盖）</summary>
         private void HookEvents()
         {
             this.FormClosing += MainForm_FormClosing;
             this.btnRollDice.Click += BtnRollDice_Click;
-            this.btnReset.Click += BtnReset_Click;
             this.boardPanel.Paint += BoardPanel_Paint;
             this.boardPanel.MouseClick += BoardPanel_MouseClick;
             this.boardPanel.MouseMove += BoardPanel_MouseMove;
             this.boardPanel.MouseLeave += BoardPanel_MouseLeave;
         }
 
-        /// <summary>初始化棋子移动动画计时器</summary>
         private void InitAnimationTimer()
         {
             _animTimer = new System.Windows.Forms.Timer();
-            _animTimer.Interval = 50;  // 每步 50ms（加速防卡顿）
+            _animTimer.Interval = 50;
             _animTimer.Tick += AnimTimer_Tick;
         }
 
-        /// <summary>初始化心跳检测计时器（每 3 秒检查一次服务器连接状态）</summary>
         private void InitHeartbeatTimer()
         {
             _heartbeatCheckTimer = new System.Windows.Forms.Timer();
@@ -223,74 +191,51 @@ namespace FlightChess.Client
             _heartbeatCheckTimer.Tick += HeartbeatCheckTimer_Tick;
         }
 
-        /// <summary>初始化烟花特效计时器（30fps）</summary>
         private void InitFireworkTimer()
         {
             _fireworkTimer = new System.Windows.Forms.Timer();
-            _fireworkTimer.Interval = 33;  // ~30fps
+            _fireworkTimer.Interval = 33;
             _fireworkTimer.Tick += FireworkTimer_Tick;
             _fireworkParticles = new List<FireworkParticle>();
             _explosionParticles = new List<FireworkParticle>();
             _fireworkRng = new Random();
         }
 
-        // =================================================================
-        //  棋盘几何初始化 — 十字环形布局
-        // =================================================================
-        /// <summary>
-        /// 棋盘几何初始化 — 标准飞行棋十字环形布局（严格顺时针）。
-        /// centerBlock(260,260)-(460,460) center=(360,360)。对称十字：
-        ///   4条外环边各200px=5格，8条臂段各160px=4格，总2080px÷40=52格。
-        /// cell 0 位于右边外缘底部 (620,460)，向上行进。
-        /// </summary>
+        // 棋盘几何初始化 — 十字环形布局（12段逆时针闭合路径，总长2080，step=40）
         private void InitBoardGeometry()
         {
-            int L = CenterX, T = CenterY;                              // 310, 310
-            int R = CenterX + CenterW, B = CenterY + CenterH;          // 410, 410
-            int cx = (L + R) / 2, cy = (T + B) / 2;                   // 360, 360（圆心不变）
-            _centerRect = new Rectangle(L, T, CenterW, CenterH);  // (310,310,100,100)
+            int L = CenterX, T = CenterY;
+            int R = CenterX + CenterW, B = CenterY + CenterH;
+            int cx = (L + R) / 2, cy = (T + B) / 2;
+            _centerRect = new Rectangle(L, T, CenterW, CenterH);
             _centerPt = new Point(cx, cy);
 
             const int OuterR = 620, OuterL = 100;
             const int OuterB = 620, OuterT = 100;
 
-            // ---- 12段逆时针闭合路径（外环不变：边200px×4，臂160px×8，总长2080，step=40） ----
+            // 12段逆时针闭合路径：4条边×200px(5格) + 8条臂×160px(4格)
             _segments = new List<(PointF a, PointF b, float angle)>();
 
-            // ---- 逆时针：从右下角(620,460)出发 ----
-            // S1:  右臂下侧 ←     (620,460)→(460,460)  160px  ← cell 0  红 起点
+            // 从右下角出发，逆时针：S1~S12
             _segments.Add((new PointF(OuterR, 460), new PointF(460, 460), (float)Math.PI));
-            // S2:  下臂右侧 ↓     (460,460)→(460,620)  160px
             _segments.Add((new PointF(460, 460), new PointF(460, OuterB), (float)(Math.PI / 2)));
-            // S3:  下边外缘 ←     (460,620)→(260,620)  200px  ← cell 13 蓝 起点
             _segments.Add((new PointF(460, OuterB), new PointF(260, OuterB), (float)Math.PI));
-            // S4:  下臂左侧 ↑     (260,620)→(260,460)  160px
             _segments.Add((new PointF(260, OuterB), new PointF(260, 460), -(float)(Math.PI / 2)));
-            // S5:  左臂下侧 ←     (260,460)→(100,460)  160px
             _segments.Add((new PointF(260, 460), new PointF(OuterL, 460), (float)Math.PI));
-            // S6:  左边外缘 ↑     (100,460)→(100,260)  200px  ← cell 26 黄 起点
             _segments.Add((new PointF(OuterL, 460), new PointF(OuterL, 260), -(float)(Math.PI / 2)));
-            // S7:  左臂上侧 →     (100,260)→(260,260)  160px
             _segments.Add((new PointF(OuterL, 260), new PointF(260, 260), 0f));
-            // S8:  上臂左侧 ↑     (260,260)→(260,100)  160px
             _segments.Add((new PointF(260, 260), new PointF(260, OuterT), -(float)(Math.PI / 2)));
-            // S9:  上边外缘 →     (260,100)→(460,100)  200px  ← cell 39 绿 起点
             _segments.Add((new PointF(260, OuterT), new PointF(460, OuterT), 0f));
-            // S10: 上臂右侧 ↓     (460,100)→(460,260)  160px
             _segments.Add((new PointF(460, OuterT), new PointF(460, 260), (float)(Math.PI / 2)));
-            // S11: 右臂上侧 →     (460,260)→(620,260)  160px
             _segments.Add((new PointF(460, 260), new PointF(OuterR, 260), 0f));
-            // S12: 右边外缘 ↓     (620,260)→(620,460)  200px  ← 闭合回 cell 0
             _segments.Add((new PointF(OuterR, 260), new PointF(OuterR, 460), (float)(Math.PI / 2)));
 
-            // 总长 = 4×200 + 8×160 = 2080，step = 40
             float totalLen = 0;
             foreach (var (a, b, _) in _segments)
                 totalLen += Dist(a.X, a.Y, b.X, b.Y);
 
-            float step = totalLen / 52f;   // 40.0
+            float step = totalLen / 52f;
 
-            // ---- 52格坐标 ----
             _gridPos = new PointF[52];
             _isCorner = new bool[52];
             _cornerAngle = new float[52];
@@ -330,25 +275,21 @@ namespace FlightChess.Client
 
                 _isCorner[i] = false;
                 _cornerAngle[i] = sAng;
-                // 颜色序列：绿(1)→红(0)→蓝(3)→黄(2) → 绿(1)→... ，四色循环
-                // 红方从 cell 0 出发遇到的第一格是绿色
-                int[] colorSeq = { 1, 0, 3, 2 };  // 绿、红、蓝、黄
+                int[] colorSeq = { 1, 0, 3, 2 };  // 绿、红、蓝、黄四色循环
                 _cellColorType[i] = colorSeq[i % 4];
             }
 
-            // ---- 大本营（四角） ----
-            // 用内缘坐标（靠近棋盘中心一侧）定位大本营，BaseSize 只影响向外延伸的尺寸
-            // 这样缩小大本营时不会把内缘推离中心
-            const int BaseInnerRight  = 495;  // 右侧大本营左缘 X（红/绿）
-            const int BaseInnerBottom = 495;  // 下侧大本营上缘 Y（红/蓝）
-            const int BaseInnerLeft   = 205;  // 左侧大本营右缘 X（黄/蓝）
-            const int BaseInnerTop    = 205;  // 上侧大本营下缘 Y（绿/黄）
+            // 大本营（四角）：用内缘坐标定位，BaseSize 向外延伸
+            const int BaseInnerRight  = 495;
+            const int BaseInnerBottom = 495;
+            const int BaseInnerLeft   = 205;
+            const int BaseInnerTop    = 205;
 
             _baseRects = new Rectangle[4];
-            _baseRects[0] = new Rectangle(BaseInnerRight, BaseInnerBottom + 20, BaseSize, BaseSize);                       // 红 右下（向下微调）
-            _baseRects[1] = new Rectangle(BaseInnerRight + 20, BaseInnerTop - BaseSize, BaseSize, BaseSize);               // 绿 右上（向右微调）
-            _baseRects[2] = new Rectangle(BaseInnerLeft - BaseSize, BaseInnerTop - BaseSize, BaseSize, BaseSize);          // 黄 左上
-            _baseRects[3] = new Rectangle(BaseInnerLeft - BaseSize, BaseInnerBottom, BaseSize, BaseSize);                  // 蓝 左下
+            _baseRects[0] = new Rectangle(BaseInnerRight, BaseInnerBottom + 20, BaseSize, BaseSize);
+            _baseRects[1] = new Rectangle(BaseInnerRight + 20, BaseInnerTop - BaseSize, BaseSize, BaseSize);
+            _baseRects[2] = new Rectangle(BaseInnerLeft - BaseSize, BaseInnerTop - BaseSize, BaseSize, BaseSize);
+            _baseRects[3] = new Rectangle(BaseInnerLeft - BaseSize, BaseInnerBottom, BaseSize, BaseSize);
 
             _baseSlots = new Point[4][];
             for (int p = 0; p < 4; p++)
@@ -363,12 +304,11 @@ namespace FlightChess.Client
                     new Point(bcx + gap/2, bcy + gap/2) };
             }
 
-            // 勋章位置（大本营朝向棋盘中心一侧）
             _medalPositions = new PointF[4];
-            _medalPositions[0] = new PointF(_baseRects[0].X - 30, _baseRects[0].Y + 30);   // 红 右下→左上角
-            _medalPositions[1] = new PointF(_baseRects[1].X + 30, _baseRects[1].Bottom + 20); // 绿 右上→左下角
-            _medalPositions[2] = new PointF(_baseRects[2].Right + 30, _baseRects[2].Bottom + 20); // 黄 左上→右下角
-            _medalPositions[3] = new PointF(_baseRects[3].Right + 30, _baseRects[3].Y + 30); // 蓝 左下→右上角
+            _medalPositions[0] = new PointF(_baseRects[0].X - 30, _baseRects[0].Y + 30);
+            _medalPositions[1] = new PointF(_baseRects[1].X + 30, _baseRects[1].Bottom + 20);
+            _medalPositions[2] = new PointF(_baseRects[2].Right + 30, _baseRects[2].Bottom + 20);
+            _medalPositions[3] = new PointF(_baseRects[3].Right + 30, _baseRects[3].Y + 30);
 
             _startMarkers = new Point[4];
             _startMarkers[0] = new Point(_baseRects[0].X + _baseRects[0].Width / 2 + 53,
@@ -380,7 +320,7 @@ namespace FlightChess.Client
             _startMarkers[3] = new Point(_baseRects[3].X + _baseRects[3].Width + 18,
                                          _baseRects[3].Y + _baseRects[3].Height / 2 + 44);
 
-            // ---- 回营路径（6步，40px步长，向中心平移40px避开外环格子，第6格在缩小后中心三角形内） ----
+            // 回营路径：6步/40px步长，向中心平移40px避开外环，第6格在中心三角形内
             _returnPathSpots = new PointF[4][];
             _returnArrowDirs = new PointF[4][];
             for (int p = 0; p < 4; p++)
@@ -388,45 +328,43 @@ namespace FlightChess.Client
                 _returnPathSpots[p] = new PointF[6];
                 _returnArrowDirs[p] = new PointF[6];
             }
-            const float retStep = 40f;  // 步长
-            const float retOffset = 40f; // 向中心平移距离，避开外环主路径格子
+            const float retStep = 40f;
+            const float retOffset = 40f;
 
-            // 红回营：右臂中央 Y=360，从外缘向内平移40px (620→580→...)，第5格在臂内缘(460)，第6格在中心三角形
+            // 红（右臂Y=360，向左）
             for (int i = 0; i < 5; i++)
             {
                 _returnPathSpots[0][i] = new PointF(OuterR - retOffset - i * retStep, cy);
                 _returnArrowDirs[0][i] = new PointF(-1, 0);
             }
-            _returnPathSpots[0][5] = new PointF(R - CenterW / 6f, cy);   // 右三角区域内 (393,360)
+            _returnPathSpots[0][5] = new PointF(R - CenterW / 6f, cy);
 
-            // 绿回营：上臂中央 X=360，从外缘向下平移40px (100→140→...)，第5格在臂内缘(260)
+            // 绿（上臂X=360，向下）
             for (int i = 0; i < 5; i++)
             {
                 _returnPathSpots[1][i] = new PointF(cx, OuterT + retOffset + i * retStep);
                 _returnArrowDirs[1][i] = new PointF(0, 1);
             }
-            _returnPathSpots[1][5] = new PointF(cx, T + CenterH / 6f);   // 上三角区域内 (360,327)
+            _returnPathSpots[1][5] = new PointF(cx, T + CenterH / 6f);
 
-            // 黄回营：左臂中央 Y=360，从左向右平移40px (100→140→...)，第5格在臂内缘(260)
+            // 黄（左臂Y=360，向右）
             for (int i = 0; i < 5; i++)
             {
                 _returnPathSpots[2][i] = new PointF(OuterL + retOffset + i * retStep, cy);
                 _returnArrowDirs[2][i] = new PointF(1, 0);
             }
-            _returnPathSpots[2][5] = new PointF(L + CenterW / 6f, cy);   // 左三角区域内 (327,360)
+            _returnPathSpots[2][5] = new PointF(L + CenterW / 6f, cy);
 
-            // 蓝回营：下臂中央 X=360，从下向上平移40px (620→580→...)，第5格在臂内缘(460)
+            // 蓝（下臂X=360，向上）
             for (int i = 0; i < 5; i++)
             {
                 _returnPathSpots[3][i] = new PointF(cx, OuterB - retOffset - i * retStep);
                 _returnArrowDirs[3][i] = new PointF(0, -1);
             }
-            _returnPathSpots[3][5] = new PointF(cx, B - CenterH / 6f);   // 下三角区域内 (360,393)
+            _returnPathSpots[3][5] = new PointF(cx, B - CenterH / 6f);
         }
 
-        // =================================================================
-        //  主绘制入口
-        // =================================================================
+        // 主绘制入口
         private void BoardPanel_Paint(object sender, PaintEventArgs e)
         {
             var g = e.Graphics;
@@ -436,38 +374,31 @@ namespace FlightChess.Client
             DrawBoardBackground(g);
             DrawCrossArms(g);
             DrawOuterRingCells(g);
-            DrawFlightJumps(g);      // 飞跃连线（在归营路径和中心之前绘制，不覆盖归营路径）
+            DrawFlightJumps(g);
             DrawBases(g);
             DrawReturnPaths(g);
             DrawCenter(g);
             DrawAllPieces(g);
-            DrawFireworks(g);      // 烟花特效
-            DrawExplosion(g);      // 踩子炸裂特效
-            DrawPodium(g);         // 颁奖台（游戏结束时，最上层）
+            DrawFireworks(g);
+            DrawExplosion(g);
+            DrawPodium(g);
         }
 
-        // ---- 整体棋盘底色：浅米黄色（复古纸质） ----
         private void DrawBoardBackground(Graphics g)
         {
             using (Brush bg = new SolidBrush(Color.FromArgb(248, 242, 225)))
                 g.FillRectangle(bg, 0, 0, BdW, BdH);
         }
 
-        // ---- 十字臂底色（与棋盘底色统一，不区分功能区域） ----
         private void DrawCrossArms(Graphics g)
         {
-            // 十字臂与棋盘背景色统一，仅作为路径定位引导
-            // 实际不绘制任何分隔线或色块区分
-            // 此方法保留作为架构占位，实际绘制在 DrawBoardBackground 中统一完成
         }
 
-        // ---- 外环52格绘制（长方形格子：长边∥路径，短边⟂路径，长:短≈1.7:1） ----
         private void DrawOuterRingCells(Graphics g)
         {
-            // 格子长方形：垂直路径方向=长边(宽)，平行路径方向=短边（长:短≈1.7:1）
-            float cellHalfShort = 12f;  // 沿路径方向半边长（短边）
-            float cellHalfLong = 20f;   // 垂直路径方向半边长（长边）
-            float circleR = 9f;         // 白色圆形半径
+            float cellHalfShort = 12f;
+            float cellHalfLong = 20f;
+            float circleR = 9f;
 
             for (int i = 0; i < 52; i++)
             {
@@ -476,20 +407,17 @@ namespace FlightChess.Client
                 Color fill = CellColors[colorType];
                 Color dark = CellColorsDark[colorType];
 
-                // 根据行进角度判断水平/垂直：sin≈0 → 水平段
                 float ang = _cornerAngle[i];
                 bool isHorizontal = Math.Abs(Math.Sin(ang)) < 0.01f;
 
                 float halfW, halfH;
                 if (isHorizontal)
                 {
-                    // 水平段：沿路径=X(短)，垂直路径=Y(长)
                     halfW = cellHalfShort;
                     halfH = cellHalfLong;
                 }
                 else
                 {
-                    // 垂直段：沿路径=Y(短)，垂直路径=X(长)
                     halfW = cellHalfLong;
                     halfH = cellHalfShort;
                 }
@@ -500,7 +428,6 @@ namespace FlightChess.Client
                 using (Brush bg = new SolidBrush(fill))
                     g.FillRectangle(bg, rect);
 
-                // 每格绘制白色圆形
                 using (Brush wb = new SolidBrush(Color.FromArgb(240, 255, 255, 255)))
                     g.FillEllipse(wb, pt.X - circleR, pt.Y - circleR, circleR * 2, circleR * 2);
                 using (Pen wp = new Pen(Color.FromArgb(180, 210, 205, 195), 0.8f))
@@ -508,7 +435,6 @@ namespace FlightChess.Client
             }
         }
 
-        // ---- 大本营（四角实心正方形） ----
         private void DrawBases(Graphics g)
         {
             for (int p = 0; p < 4; p++)
@@ -517,11 +443,9 @@ namespace FlightChess.Client
                 Color baseColor = PlyCol[p];
                 Color lightColor = PlyLight[p];
 
-                // 实心正方形色块（无圆角、无描边）
                 using (Brush bg = new SolidBrush(baseColor))
                     g.FillRectangle(bg, r);
 
-                // 内部4个同色系圆形图案（2×2均匀排布）
                 int circleR = 14;
                 int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
                 int gap = 33;
@@ -534,18 +458,14 @@ namespace FlightChess.Client
                 foreach (var off in offsets)
                 {
                     int ccx = cx + off[0], ccy = cy + off[1];
-                    // 稍浅的填充
                     using (Brush cb = new SolidBrush(Color.FromArgb(200, lightColor)))
                         g.FillEllipse(cb, ccx - circleR, ccy - circleR, circleR * 2, circleR * 2);
-                    // 描边
                     using (Pen cp = new Pen(Color.FromArgb(180, PlyDark[p]), 1.5f))
                         g.DrawEllipse(cp, ccx - circleR, ccy - circleR, circleR * 2, circleR * 2);
                 }
 
-                // START圆形标识（大本营旁边，阵营颜色，半径扩大）
                 var sm = _startMarkers[p];
                 int sr = 16;
-                // 底色使用阵营的浅色
                 using (Brush wb = new SolidBrush(Color.FromArgb(220, PlyLight[p])))
                     g.FillEllipse(wb, sm.X - sr, sm.Y - sr, sr * 2, sr * 2);
                 using (Pen bp = new Pen(PlyDark[p], 1.8f))
@@ -559,7 +479,6 @@ namespace FlightChess.Client
             }
         }
 
-        // ---- 四条回营路径 ----
         private void DrawReturnPaths(Graphics g)
         {
             for (int p = 0; p < 4; p++)
@@ -568,33 +487,26 @@ namespace FlightChess.Client
                 var dirs = _returnArrowDirs[p];
                 Color pathColor = PlyCol[p];
 
-                // 格子半边长16px（总宽32px），40px步长下留8px间隙，不重叠
                 float cellHalf = 16f;
                 float circleR = 8f;
 
                 for (int i = 0; i < 6; i++)
                 {
                     PointF pt = spots[i];
-                    // 第6步(索引5)为中心三角形位置，只绘制白色圆形不绘制方格
                     bool isCenterStep = (i == 5);
 
                     if (!isCenterStep)
                     {
-                        // 实心正方形格子（阵营专色，紧密相连无缝隙）
                         RectangleF rect = new RectangleF(
                             pt.X - cellHalf, pt.Y - cellHalf,
                             cellHalf * 2, cellHalf * 2);
                         using (Brush bg = new SolidBrush(pathColor))
                             g.FillRectangle(bg, rect);
 
-                        // 小型飞机图案（同色系稍浅）
                         DrawTinyPlane(g, pt, Color.FromArgb(180, PlyLight[p]), 0.6f);
-
-                        // 小型方向箭头（指向中心）
                         DrawTinyArrow(g, pt, dirs[i], Color.FromArgb(220, 255, 255, 255));
                     }
 
-                    // 每格绘制白色圆形（包括中心三角形位置，标识这也是路径的一部分）
                     using (Brush wb = new SolidBrush(Color.FromArgb(200, 255, 255, 255)))
                         g.FillEllipse(wb, pt.X - circleR, pt.Y - circleR, circleR * 2, circleR * 2);
                     using (Pen wp = new Pen(Color.FromArgb(150, 200, 195, 185), 0.8f))
@@ -603,7 +515,6 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>绘制小型飞机图案（回营路径格内）</summary>
         private void DrawTinyPlane(Graphics g, PointF pt, Color color, float scale)
         {
             float radius = 8f * scale;  
@@ -611,14 +522,12 @@ namespace FlightChess.Client
             {
                 g.FillEllipse(brush, pt.X - radius, pt.Y - radius, radius * 2, radius * 2);
             }
-            // 可选：添加细边框
             using (Pen pen = new Pen(Color.Black, 0.8f))
             {
                 g.DrawEllipse(pen, pt.X - radius, pt.Y - radius, radius * 2, radius * 2);
             }
         }
 
-        /// <summary>绘制小型方向箭头（回营路径格内）</summary>
         private void DrawTinyArrow(Graphics g, PointF pt, PointF dir, Color color)
         {
             float len = 10f;
@@ -629,7 +538,6 @@ namespace FlightChess.Client
             dx /= mag; dy /= mag;
             float perpX = -dy, perpY = dx;
 
-            // 箭杆
             PointF start = new PointF(pt.X - dx * len * 0.5f, pt.Y - dy * len * 0.5f);
             PointF end = new PointF(pt.X + dx * len * 0.3f, pt.Y + dy * len * 0.3f);
             using (Pen ap = new Pen(color, 1.5f))
@@ -639,7 +547,6 @@ namespace FlightChess.Client
                 g.DrawLine(ap, start, end);
             }
 
-            // 箭头
             PointF tip = new PointF(pt.X + dx * len * 0.55f, pt.Y + dy * len * 0.55f);
             PointF lw = new PointF(tip.X - dx * headSz + perpX * headSz * 0.6f,
                                     tip.Y - dy * headSz + perpY * headSz * 0.6f);
@@ -650,7 +557,6 @@ namespace FlightChess.Client
                 g.FillPolygon(ab, tri);
         }
 
-       //中心区域：四色三角形 + "机"字 + 白色圆形
         private void DrawCenter(Graphics g)
         {
             int L = CenterX, T = CenterY;
@@ -663,28 +569,19 @@ namespace FlightChess.Client
             PointF bottomLeft = new PointF(L, B);
             PointF center = new PointF(cx, cy);
 
-            // 上三角形（绿）
             using (Brush brush = new SolidBrush(PlyCol[1]))
                 g.FillPolygon(brush, new PointF[] { center, topLeft, topRight });
-            // 下三角形（蓝）
             using (Brush brush = new SolidBrush(PlyCol[3]))
                 g.FillPolygon(brush, new PointF[] { center, bottomLeft, bottomRight });
-            // 左三角形（黄）
             using (Brush brush = new SolidBrush(PlyCol[2]))
                 g.FillPolygon(brush, new PointF[] { center, topLeft, bottomLeft });
-            // 右三角形（红）
             using (Brush brush = new SolidBrush(PlyCol[0]))
                 g.FillPolygon(brush, new PointF[] { center, topRight, bottomRight });
 
-            // 每个三角形上绘制白色圆形（标识这也是路径的一部分）
             float triCircleR = 10f;
-            // 上三角圆心（绿）
             PointF triCtrUp = new PointF(cx, T + CenterH / 6);
-            // 下三角圆心（蓝）
             PointF triCtrDown = new PointF(cx, B - CenterH / 6);
-            // 左三角圆心（黄）
             PointF triCtrLeft = new PointF(L + CenterW / 6, cy);
-            // 右三角圆心（红）
             PointF triCtrRight = new PointF(R - CenterW / 6, cy);
 
             PointF[] triCenters = { triCtrRight, triCtrUp, triCtrLeft, triCtrDown };
@@ -705,10 +602,9 @@ namespace FlightChess.Client
             }
         }
 
-        // ---- 飞跃跳连接线（与主路径格子等宽的纯白直线，从归营路径下方穿过） ----
         private void DrawFlightJumps(Graphics g)
         {
-            float lineWidth = 24f;  // 与主路径格子短边等宽（cellHalfShort*2）
+            float lineWidth = 24f;
 
             for (int p = 0; p < 4; p++)
             {
@@ -716,7 +612,6 @@ namespace FlightChess.Client
                 PointF from = _gridPos[fromAbs];
                 PointF to = _gridPos[toAbs];
 
-                // 纯白直线条（与格子等宽，圆角端点）
                 using (Pen linePen = new Pen(Color.FromArgb(240, 255, 255, 255), lineWidth))
                 {
                     linePen.StartCap = LineCap.Round;
@@ -724,31 +619,26 @@ namespace FlightChess.Client
                     g.DrawLine(linePen, from, to);
                 }
 
-                // 细边框勾勒
                 using (Pen edgePen = new Pen(Color.FromArgb(160, 200, 195, 185), 1f))
-                {
                     g.DrawLine(edgePen, from, to);
-                }
 
-                // 在直线 1/3 和 2/3 处绘制同色方向箭头
                 DrawStraightArrow(g, from, to, 0.33f, p);
                 DrawStraightArrow(g, from, to, 0.67f, p);
             }
         }
 
-        /// <summary>在直线上指定位置绘制方向箭头（playerIndex 决定颜色）</summary>
         private void DrawStraightArrow(Graphics g, PointF from, PointF to, float t, int playerIndex)
         {
             float dx = to.X - from.X;
             float dy = to.Y - from.Y;
             float mag = (float)Math.Sqrt(dx * dx + dy * dy);
             if (mag < 0.01f) return;
-            float ux = dx / mag;    // 单位方向
+            float ux = dx / mag;
             float uy = dy / mag;
-            float px = -uy;         // 垂直方向
+            float px = -uy;
             float py = ux;
 
-            float cx = from.X + dx * t;   // 箭头中心
+            float cx = from.X + dx * t;
             float cy = from.Y + dy * t;
 
             float arrowLen = 14f;
@@ -766,15 +656,12 @@ namespace FlightChess.Client
                 g.DrawPolygon(ap, new PointF[] { tip, left, right });
         }
 
-        // =================================================================
-        //  棋子绘制（平面卡通飞机，无光晕、无特效）
-        // =================================================================
+        // 棋子绘制
         private void DrawAllPieces(Graphics g)
         {
             GameState st;
             lock (_stateLock) { if (_currentGameState == null) return; st = _currentGameState.DeepCopy(); }
 
-            // 收集各外环格上棋子
             List<(int p, int q)>[] cellOcc = new List<(int p, int q)>[52];
             for (int i = 0; i < 52; i++) cellOcc[i] = new List<(int, int)>();
 
@@ -790,7 +677,6 @@ namespace FlightChess.Client
                 }
             }
 
-            // 绘外环棋子
             bool isAnimating = _animTimer.Enabled && _animPath != null
                 && _animPathIndex >= 0 && _animPathIndex < _animPath.Count;
             for (int i = 0; i < 52; i++)
@@ -801,19 +687,16 @@ namespace FlightChess.Client
                 {
                     var (pl, qi) = cellOcc[i][k];
                     if (isAnimating && pl == _animPlayer && qi == _animPiece)
-                        continue;  // 动画中跳过实际位置
+                        continue;
                     var (ox, oy) = StackOff(cellOcc[i].Count, k);
                     bool canMove = (pl == _myPlayerId && IsMyValidMove(st, pl, qi));
                     DrawPiece(g, pl, qi, ctr.X + ox, ctr.Y + oy, canMove);
                 }
             }
 
-            // 绘基地棋子（未起飞 pos==-1 普通样式）和归营棋子（pos==58 金色星标样式）
-            // 走完全程的棋子回到大本营，以归营棋子的样式显示
             for (int pl = 0; pl < 4; pl++)
             {
                 if (!st.Players[pl].HasJoined) continue;
-                // 收集棋子：先基地后归营，保证基地棋子填充前面的槽位
                 var basePieces = new System.Collections.Generic.List<int>();
                 var goalPieces = new System.Collections.Generic.List<int>();
                 for (int qi = 0; qi < 4; qi++)
@@ -824,20 +707,17 @@ namespace FlightChess.Client
                 }
 
                 int si = 0;
-                // 未起飞棋子（普通样式）
                 foreach (int qi in basePieces)
                 {
                     if (si >= 4) break;
                     if (isAnimating && pl == _animPlayer && qi == _animPiece)
-                    { si++; continue; }  // 动画中跳过实际位置，但槽位仍占用
-                    // 被踩棋子动画中：暂不绘在基地（稍后在原位绘制）
+                    { si++; continue; }
                     if (isAnimating && pl == _kickedPlayer && qi == _kickedPiece)
                     { si++; continue; }
                     Point pt = _baseSlots[pl][si];
                     DrawPiece(g, pl, qi, pt.X, pt.Y, false);
                     si++;
                 }
-                // 归营棋子（金色星标特殊样式）
                 foreach (int qi in goalPieces)
                 {
                     if (si >= 4) break;
@@ -851,7 +731,6 @@ namespace FlightChess.Client
                 }
             }
 
-            // 绘START位置棋子（起飞后等待进入主路径）
             for (int pl = 0; pl < 4; pl++)
             {
                 if (!st.Players[pl].HasJoined) continue;
@@ -860,14 +739,13 @@ namespace FlightChess.Client
                     int pos = st.Players[pl].Pieces[qi];
                     if (pos != FlightChessEngine.StartPosition) continue;
                     if (isAnimating && pl == _animPlayer && qi == _animPiece)
-                        continue;  // 动画中跳过实际位置
+                        continue;
                     Point pt = _startMarkers[pl];
                     bool canMove = (pl == _myPlayerId && IsMyValidMove(st, pl, qi));
                     DrawPiece(g, pl, qi, pt.X, pt.Y, canMove);
                 }
             }
 
-            // 绘回营路径棋子（52~57）
             for (int pl = 0; pl < 4; pl++)
             {
                 if (!st.Players[pl].HasJoined) continue;
@@ -876,7 +754,7 @@ namespace FlightChess.Client
                     int pos = st.Players[pl].Pieces[qi];
                     if (pos < 52 || pos > 57) continue;
                     if (isAnimating && pl == _animPlayer && qi == _animPiece)
-                        continue;  // 动画中跳过实际位置
+                        continue;
                     int fi = pos - 52;
                     if (fi < 0 || fi >= 6) continue;
                     PointF pt = _returnPathSpots[pl][fi];
@@ -885,15 +763,12 @@ namespace FlightChess.Client
                 }
             }
 
-            // 动画叠加：在动画路径当前位置绘制棋子
             if (isAnimating && _animPlayer >= 0 && _animPiece >= 0)
             {
                 PointF animPos = _animPath[_animPathIndex];
-                bool canMove = false;  // 动画中不可点击移动
-                DrawPiece(g, _animPlayer, _animPiece, animPos.X, animPos.Y, canMove);
+                DrawPiece(g, _animPlayer, _animPiece, animPos.X, animPos.Y, false);
             }
 
-            // 被踩棋子：动画期间保留在原位（与新棋子重叠），动画结束后消失回基地
             if (isAnimating && _kickedPlayer >= 0 && _kickedPiece >= 0)
             {
                 DrawPiece(g, _kickedPlayer, _kickedPiece,
@@ -914,7 +789,6 @@ namespace FlightChess.Client
             return (0, 0);
         }
 
-        /// <summary>绘制一枚棋子（传统平面飞机）</summary>
         private void DrawPiece(Graphics g, int player, int idx, float x, float y,
             bool canMove)
         {
@@ -923,7 +797,6 @@ namespace FlightChess.Client
             Color dark = PlyDark[player];
             Color light = PlyLight[player];
 
-            // 可移动提示：仅虚线圆圈，无光晕
             if (canMove)
             {
                 using (Pen cp = new Pen(Color.FromArgb(180, 60, 60, 60), 1.8f)
@@ -931,15 +804,12 @@ namespace FlightChess.Client
                     g.DrawEllipse(cp, x - r - 5, y - r - 5, (r + 5) * 2, (r + 5) * 2);
             }
 
-            // 悬停效果：橙色虚线
             if (_hoverPlayer == player && _hoverPiece == idx)
                 using (Pen hp = new Pen(Color.DarkOrange, 2.5f) { DashStyle = DashStyle.Dash })
                     g.DrawEllipse(hp, x - r - 4, y - r - 4, (r + 4) * 2, (r + 4) * 2);
 
-            // 平面飞机造型（无论是否完成，统一外观，无状态标识）
             DrawFlatAirplane(g, x, y, r, main, dark, light);
 
-            // 棋子小序号
             using (Font f = new Font("Arial", 6.5f, FontStyle.Bold))
             using (Brush tb = new SolidBrush(Color.White))
             {
@@ -949,30 +819,24 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>绘制已归营棋子（棕色圆形 + 金色外圈 + 金色五角星填满圆形）</summary>
         private void DrawGoalPiece(Graphics g, int player, int idx, float x, float y)
         {
             float r = 11f;
 
-            // 金色外圈（光环）
             float ringOuterR = r + 3f;
             float ringThickness = 2.5f;
             using (Pen goldRing = new Pen(Color.FromArgb(240, 255, 215, 0), ringThickness))
                 g.DrawEllipse(goldRing, x - ringOuterR, y - ringOuterR, ringOuterR * 2, ringOuterR * 2);
 
-            // 棕色圆形底色
-            Color brown = Color.FromArgb(220, 139, 90, 43);  // 棕色
+            Color brown = Color.FromArgb(220, 139, 90, 43);
             using (Brush brownBg = new SolidBrush(brown))
                 g.FillEllipse(brownBg, x - r, y - r, r * 2, r * 2);
 
-            // 棕色圆形边框
             using (Pen brownEdge = new Pen(Color.FromArgb(200, 110, 65, 30), 1.2f))
                 g.DrawEllipse(brownEdge, x - r, y - r, r * 2, r * 2);
 
-            // 金色五角星（占满圆形内部）
             DrawGoldStarFilled(g, x, y, r);
 
-            // 棋子小序号
             using (Font f = new Font("Arial", 6.5f, FontStyle.Bold))
             using (Brush tb = new SolidBrush(Color.FromArgb(220, 80, 50, 20)))
             {
@@ -982,12 +846,11 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>绘制金色五角星（填满圆形，外顶点接触圆周边界）</summary>
         private void DrawGoldStarFilled(Graphics g, float cx, float cy, float r)
         {
             int pts = 5;
-            float outerR = r * 0.92f;   // 外顶点接近圆周边界
-            float innerR = r * 0.38f;   // 内顶点比例（sin18°/sin54° ≈ 0.382）
+            float outerR = r * 0.92f;
+            float innerR = r * 0.38f;
             PointF[] star = new PointF[pts * 2];
             for (int i = 0; i < pts * 2; i++)
             {
@@ -996,34 +859,27 @@ namespace FlightChess.Client
                 star[i] = new PointF(cx + (float)Math.Cos(rad) * radius,
                                      cy + (float)Math.Sin(rad) * radius);
             }
-            // 金色填充
             using (Brush sb = new SolidBrush(Color.FromArgb(250, 255, 215, 0)))
                 g.FillPolygon(sb, star);
-            // 深金色描边
             using (Pen sp = new Pen(Color.FromArgb(200, 200, 150, 20), 0.8f))
                 g.DrawPolygon(sp, star);
         }
 
-        /// <summary>绘制平面飞机棋子（无渐变、无光效）</summary>
         private void DrawFlatAirplane(Graphics g, float x, float y, float r,
             Color main, Color dark, Color light)
         {
-            // 主体圆形（纯色填充）
             using (Brush bb = new SolidBrush(main))
                 g.FillEllipse(bb, x - r, y - r, r * 2, r * 2);
 
-            // 轮廓
             using (Pen bp = new Pen(dark, 2f))
                 g.DrawEllipse(bp, x - r, y - r, r * 2, r * 2);
 
-            // 机头（上半部稍浅的半椭球）
             float headH = r * 0.55f, headW = r * 0.7f;
             using (Brush hb = new SolidBrush(light))
                 g.FillEllipse(hb, x - headW, y - r - headH * 0.7f, headW * 2, headH * 2);
             using (Pen hp = new Pen(dark, 1.2f))
                 g.DrawEllipse(hp, x - headW, y - r - headH * 0.7f, headW * 2, headH * 2);
 
-            // 两侧机翼
             PointF[] wingL = {
                 new PointF(x - r - 2, y),
                 new PointF(x - r + 4, y - 4),
@@ -1040,7 +896,6 @@ namespace FlightChess.Client
                 g.FillPolygon(wb, wingR);
             }
 
-            // 高光小点（平面风格的小白点）
             using (Brush hl = new SolidBrush(Color.FromArgb(160, 255, 255, 255)))
                 g.FillEllipse(hl, x - 3, y - 5, 4, 3);
         }
@@ -1055,16 +910,12 @@ namespace FlightChess.Client
             return eng.GetValidMoves(st.Players[_myPlayerId], st.DiceValue).Contains(pidx);
         }
 
-        // =================================================================
-        //  鼠标交互
-        // =================================================================
+        // 鼠标交互
         private PointF PieceScreenPos(GameState st, int pl, int qi)
         {
             int pos = st.Players[pl].Pieces[qi];
-            // START标记位置
             if (pos == FlightChessEngine.StartPosition)
                 return _startMarkers[pl];
-            // 基地或已完成
             if (pos == -1)
             {
                 int si = 0;
@@ -1154,9 +1005,7 @@ namespace FlightChess.Client
             return (float)Math.Sqrt(dx * dx + dy * dy);
         }
 
-        // =================================================================
-        //  动画：棋子依次走过沿途格子 / 飞跃直飞 / 踩子重叠
-        // =================================================================
+        // 棋子移动动画
         private void AnimTimer_Tick(object sender, EventArgs e)
         {
             if (_animPath != null && _animPathIndex < _animPath.Count - 1)
@@ -1170,14 +1019,12 @@ namespace FlightChess.Client
                 _animPlayer = -1;
                 _animPiece = -1;
                 _animPath = null;
-                // 动画结束后清除踩子残留（被踩棋子已回到基地）
                 _kickedPlayer = -1;
                 _kickedPiece = -1;
                 boardPanel.Invalidate();
             }
         }
 
-        /// <summary>根据位置值获取对应的屏幕坐标（用于动画路径）</summary>
         private PointF GetScreenPosForPosition(GameState st, int player, int pos)
         {
             if (pos == FlightChessEngine.StartPosition)
@@ -1189,11 +1036,9 @@ namespace FlightChess.Client
                 int abs = FlightChessEngine.ToAbsoluteIndex(st.Players[player].StartOffset, pos);
                 return (abs >= 0 && abs < 52) ? _gridPos[abs] : new PointF(360, 360);
             }
-            // 基地或终点：返回大本营中心附近
             return _baseSlots[player][0];
         }
 
-        /// <summary>构建棋子从 fromPos 到 toPos 沿途的屏幕坐标路径（沿主路径逐格）</summary>
         private System.Collections.Generic.List<PointF> BuildAnimPath(GameState st, int player,
             int fromPos, int toPos)
         {
@@ -1205,23 +1050,15 @@ namespace FlightChess.Client
             return path;
         }
 
-        /// <summary>
-        /// 构建飞跃跳组合动画路径：
-        /// 第一阶段从 oldPos+1 沿主路径走到位置 17（骰子移动部分）；
-        /// 第二阶段从 17 沿白色直线飞到 29（飞跃部分）。
-        /// </summary>
+        /// <summary>构建飞跃跳动画路径：骰子移动 + 白色直线飞跃。</summary>
         private System.Collections.Generic.List<PointF> BuildCombinedFlightAnimPath(
             GameState st, int player, int oldPos)
         {
             var path = new System.Collections.Generic.List<PointF>();
 
-            // Phase 1: 沿主路径从 oldPos+1 走到 17（骰子移动）
             for (int p = oldPos + 1; p <= 17; p++)
-            {
                 path.Add(GetScreenPosForPosition(st, player, p));
-            }
 
-            // Phase 2: 沿白色直线从 17 飞到 29（飞跃跳）
             PointF from = GetScreenPosForPosition(st, player, 17);
             PointF to = GetScreenPosForPosition(st, player, 29);
             int flightSteps = 10;
@@ -1235,7 +1072,6 @@ namespace FlightChess.Client
             return path;
         }
 
-        /// <summary>检测被踩回基地的棋子（旧状态在主路径 → 新状态在基地）</summary>
         private void DetectKickedPieces(GameState oldState, GameState newState)
         {
             _kickedPlayer = -1;
@@ -1247,13 +1083,11 @@ namespace FlightChess.Client
                 {
                     int oldPos = oldState.Players[pl].Pieces[qi];
                     int newPos = newState.Players[pl].Pieces[qi];
-                    // 从主路径上被踩回基地
                     if (oldPos >= 0 && oldPos < FlightChessEngine.BoardSize && newPos == -1)
                     {
                         _kickedPlayer = pl;
                         _kickedPiece = qi;
                         _kickedScreenPos = GetScreenPosForPosition(oldState, pl, oldPos);
-                        // 在被踩位置触发炸裂动画
                         SpawnExplosion(_kickedScreenPos.X, _kickedScreenPos.Y, PlyCol[pl]);
                         return;
                     }
@@ -1261,14 +1095,11 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>检测新旧状态之间的棋子移动，触发步进动画。
-        /// 仅在确实检测到棋子移动时才创建新动画，不会因无移动的状态更新而截断正在播放的动画。</summary>
+        /// <summary>检测棋子移动并触发步进动画。仅在确实有棋子移动时才创建新动画。</summary>
         private void DetectAndAnimate(GameState oldState, GameState newState)
         {
             if (oldState?.Players == null || newState?.Players == null) return;
 
-            // 先检测是否有棋子发生了移动，避免因纯信息类 GameStateUpdate
-            // （如其他玩家掷骰子）无故截断正在播放的动画，造成瞬移感。
             for (int pl = 0; pl < 4; pl++)
             {
                 if (!newState.Players[pl].HasJoined) continue;
@@ -1278,7 +1109,6 @@ namespace FlightChess.Client
                     int newPos = newState.Players[pl].Pieces[qi];
                     if (oldPos == newPos) continue;
 
-                    // --- 有棋子移动：先停止当前动画，再启动新动画 ---
                     if (_animTimer.Enabled)
                     {
                         _animTimer.Stop();
@@ -1286,7 +1116,6 @@ namespace FlightChess.Client
                         _kickedPlayer = -1; _kickedPiece = -1;
                     }
 
-                    // 归营路径到达终点：走过剩余格子到 57 再归营
                     if (newPos == FlightChessEngine.GoalPosition
                         && oldPos >= FlightChessEngine.FinishStart
                         && oldPos <= FlightChessEngine.FinishEnd)
@@ -1305,7 +1134,6 @@ namespace FlightChess.Client
                         return;
                     }
 
-                    // 主路径直接到达终点：走过主路径剩余 + 全部归营路径到 57
                     if (newPos == FlightChessEngine.GoalPosition
                         && oldPos >= 0 && oldPos < FlightChessEngine.BoardSize)
                     {
@@ -1324,8 +1152,6 @@ namespace FlightChess.Client
                         return;
                     }
 
-                    // 飞跃跳检测：骰子移动 + 飞跃跳的总位移 ≥ 12
-                    // （最大普通移动 = 骰子6 + 同色跳4 = 10；飞跃跳 = 骰子1~6 + 12）
                     bool isFlightJump = newPos >= 0 && newPos < FlightChessEngine.BoardSize
                         && oldPos >= 0 && oldPos < FlightChessEngine.BoardSize
                         && newPos - oldPos >= 12;
@@ -1344,7 +1170,6 @@ namespace FlightChess.Client
                         return;
                     }
 
-                    // 主路径和归营路径上的前进移动
                     if (newPos > oldPos && newPos <= FlightChessEngine.FinishEnd
                         && oldPos >= FlightChessEngine.StartPosition)
                     {
@@ -1360,7 +1185,6 @@ namespace FlightChess.Client
                         return;
                     }
 
-                    // 归营路径回退动画（超出 57 反弹回来）
                     if (oldPos >= FlightChessEngine.FinishStart
                         && oldPos <= FlightChessEngine.FinishEnd
                         && newPos >= FlightChessEngine.FinishStart
@@ -1387,46 +1211,39 @@ namespace FlightChess.Client
             }
         }
 
-        // =================================================================
-        //  烟花特效（胜利时播放）
-        // =================================================================
-        /// <summary>启动烟花特效</summary>
+        // 烟花特效
         private void StartFireworks()
         {
             _fireworksActive = true;
-            _fireworkBurstsLeft = 8;  // 总共 8 波烟花
+            _fireworkBurstsLeft = 8;
             _fireworkParticles.Clear();
             _fireworkTimer.Start();
-            // 立即生成第一波
             SpawnFireworkBurst();
         }
 
-        /// <summary>生成一波烟花粒子</summary>
         private void SpawnFireworkBurst()
         {
-            // 在棋盘中央区域随机位置爆发
-            float cx = 260 + (float)_fireworkRng.NextDouble() * 200;  // 260~460
-            float cy = 260 + (float)_fireworkRng.NextDouble() * 200;  // 260~460
+            float cx = 260 + (float)_fireworkRng.NextDouble() * 200;
+            float cy = 260 + (float)_fireworkRng.NextDouble() * 200;
 
-            // 胜利方颜色 + 金色 + 白色混合
             Color[] burstColors = new Color[] {
-                Color.FromArgb(255, 215, 0),     // 金色
-                Color.FromArgb(255, 80, 80),     // 红
-                Color.FromArgb(80, 220, 80),     // 绿
-                Color.FromArgb(255, 220, 50),    // 黄
-                Color.FromArgb(70, 140, 255),    // 蓝
-                Color.FromArgb(255, 255, 255),   // 白
-                Color.FromArgb(255, 150, 50),    // 橙
-                Color.FromArgb(255, 100, 200),   // 粉
+                Color.FromArgb(255, 215, 0),
+                Color.FromArgb(255, 80, 80),
+                Color.FromArgb(80, 220, 80),
+                Color.FromArgb(255, 220, 50),
+                Color.FromArgb(70, 140, 255),
+                Color.FromArgb(255, 255, 255),
+                Color.FromArgb(255, 150, 50),
+                Color.FromArgb(255, 100, 200),
             };
 
-            int particleCount = 40 + _fireworkRng.Next(30);  // 40~70 个粒子
+            int particleCount = 40 + _fireworkRng.Next(30);
             for (int i = 0; i < particleCount; i++)
             {
                 float angle = (float)(_fireworkRng.NextDouble() * Math.PI * 2);
-                float speed = 1.5f + (float)_fireworkRng.NextDouble() * 4f;  // 1.5~5.5
-                float life = 0.6f + (float)_fireworkRng.NextDouble() * 0.4f; // 0.6~1.0
-                float size = 2f + (float)_fireworkRng.NextDouble() * 3.5f;   // 2~5.5
+                float speed = 1.5f + (float)_fireworkRng.NextDouble() * 4f;
+                float life = 0.6f + (float)_fireworkRng.NextDouble() * 0.4f;
+                float size = 2f + (float)_fireworkRng.NextDouble() * 3.5f;
 
                 _fireworkParticles.Add(new FireworkParticle
                 {
@@ -1441,13 +1258,11 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>在指定坐标生成踩子炸裂粒子（增强版 — 更多粒子 + 更大范围 + 更持久）</summary>
         private void SpawnExplosion(float x, float y, Color kickerColor)
         {
             _explosionActive = true;
             _explosionParticles.Clear();
 
-            // 爆炸色板：被踩方颜色 + 火焰色系
             Color[] burstColors = new Color[] {
                 kickerColor,
                 Color.FromArgb(255, 100, 30),   // 橙红
@@ -1458,14 +1273,13 @@ namespace FlightChess.Client
                 Color.FromArgb(255, 200, 20),   // 橙黄亮
             };
 
-            // 主爆粒子：数量翻倍，速度更快，范围更大
-            int particleCount = 50 + _fireworkRng.Next(30);  // 50~79 个粒子
+            int particleCount = 50 + _fireworkRng.Next(30);
             for (int i = 0; i < particleCount; i++)
             {
                 float angle = (float)(_fireworkRng.NextDouble() * Math.PI * 2);
-                float speed = 1.5f + (float)_fireworkRng.NextDouble() * 6f;  // 1.5~7.5
-                float life = 0.5f + (float)_fireworkRng.NextDouble() * 0.6f; // 0.5~1.1
-                float size = 2.5f + (float)_fireworkRng.NextDouble() * 6f;   // 2.5~8.5
+                float speed = 1.5f + (float)_fireworkRng.NextDouble() * 6f;
+                float life = 0.5f + (float)_fireworkRng.NextDouble() * 0.6f;
+                float size = 2.5f + (float)_fireworkRng.NextDouble() * 6f;
 
                 _explosionParticles.Add(new FireworkParticle
                 {
@@ -1478,8 +1292,7 @@ namespace FlightChess.Client
                 });
             }
 
-            // 中心闪光环：少量大粒子慢速扩散，形成冲击波感
-            int flashCount = 8 + _fireworkRng.Next(5);  // 8~12 个闪光粒子
+            int flashCount = 8 + _fireworkRng.Next(5);
             for (int i = 0; i < flashCount; i++)
             {
                 float angle = (float)(i * Math.PI * 2 / flashCount);
@@ -1488,18 +1301,16 @@ namespace FlightChess.Client
                     X = x, Y = y,
                     Vx = (float)Math.Cos(angle) * 0.3f,
                     Vy = (float)Math.Sin(angle) * 0.3f,
-                    Color = Color.FromArgb(255, 255, 240),  // 炽白闪光
+                    Color = Color.FromArgb(255, 255, 240),
                     Life = 0.4f,
-                    Size = 8f + (float)_fireworkRng.NextDouble() * 4f  // 8~12 大粒子
+                    Size = 8f + (float)_fireworkRng.NextDouble() * 4f
                 });
             }
 
-            // 确保定时器在运行（复用烟花定时器驱动炸裂粒子）
             if (!_fireworkTimer.Enabled)
                 _fireworkTimer.Start();
         }
 
-        /// <summary>烟花定时器更新（~30fps）</summary>
         private void FireworkTimer_Tick(object sender, EventArgs e)
         {
             bool anyAlive = false;
@@ -1507,16 +1318,15 @@ namespace FlightChess.Client
             foreach (var p in _fireworkParticles)
             {
                 if (p.Life <= 0) continue;
-                p.Life -= 0.025f;          // 生命衰减
+                p.Life -= 0.025f;
                 p.X += p.Vx;
                 p.Y += p.Vy;
-                p.Vy += 0.08f;             // 重力
-                p.Vx *= 0.99f;             // 空气阻力
-                p.Size *= 0.995f;           // 粒子缩小
+                p.Vy += 0.08f;
+                p.Vx *= 0.99f;
+                p.Size *= 0.995f;
                 if (p.Life > 0) anyAlive = true;
             }
 
-            // 定期生成新波次
             int aliveCount = 0;
             foreach (var fp in _fireworkParticles) { if (fp.Life > 0) aliveCount++; }
             if (_fireworkBurstsLeft > 0 && aliveCount < 20)
@@ -1525,17 +1335,16 @@ namespace FlightChess.Client
                 _fireworkBurstsLeft--;
             }
 
-            // 更新炸裂粒子（慢衰减，更持久明显）
             bool anyExplosionAlive = false;
             foreach (var ep in _explosionParticles)
             {
                 if (ep.Life <= 0) continue;
-                ep.Life -= 0.020f;          // 慢衰减（~1.3秒@max life 1.1）
+                ep.Life -= 0.020f;
                 ep.X += ep.Vx;
                 ep.Y += ep.Vy;
-                ep.Vy += 0.04f;             // 轻重力
-                ep.Vx *= 0.975f;            // 空气阻力
-                ep.Size *= 0.993f;          // 缓慢缩小
+                ep.Vy += 0.04f;
+                ep.Vx *= 0.975f;
+                ep.Size *= 0.993f;
                 if (ep.Life > 0) anyExplosionAlive = true;
             }
             if (!anyExplosionAlive && _explosionActive)
@@ -1544,7 +1353,6 @@ namespace FlightChess.Client
                 _explosionParticles.Clear();
             }
 
-            // 所有粒子消亡后停止
             if (!anyAlive && _fireworkBurstsLeft <= 0 && !_explosionActive)
             {
                 _fireworkTimer.Stop();
@@ -1555,7 +1363,6 @@ namespace FlightChess.Client
             boardPanel.Invalidate();
         }
 
-        /// <summary>绘制烟花粒子</summary>
         private void DrawFireworks(Graphics g)
         {
             if (!_fireworksActive) return;
@@ -1572,7 +1379,6 @@ namespace FlightChess.Client
                 float s = p.Size;
                 if (s < 0.5f) s = 0.5f;
 
-                // 发光粒子（外层光晕 + 核心）
                 using (Brush glow = new SolidBrush(Color.FromArgb(alpha / 3, c)))
                     g.FillEllipse(glow, p.X - s * 2, p.Y - s * 2, s * 4, s * 4);
                 using (Brush core = new SolidBrush(c))
@@ -1580,7 +1386,6 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>绘制踩子炸裂粒子</summary>
         private void DrawExplosion(Graphics g)
         {
             if (!_explosionActive) return;
@@ -1597,7 +1402,6 @@ namespace FlightChess.Client
                 float s = p.Size;
                 if (s < 0.3f) s = 0.3f;
 
-                // 爆炸粒子：外层光晕（扇形扩散感）+ 核心亮点
                 using (Brush glow = new SolidBrush(Color.FromArgb(alpha / 4, c)))
                     g.FillEllipse(glow, p.X - s * 3, p.Y - s * 3, s * 6, s * 6);
                 using (Brush mid = new SolidBrush(Color.FromArgb(alpha / 2, c)))
@@ -1607,20 +1411,16 @@ namespace FlightChess.Client
             }
         }
 
-        // =================================================================
-        //  颁奖台绘制（游戏结束时，前三名领奖台）
-        // =================================================================
+        // 颁奖台绘制
         private void DrawPodium(Graphics g)
         {
             GameState st;
             lock (_stateLock) { if (_currentGameState == null) return; st = _currentGameState.DeepCopy(); }
             if (!st.GameOver) return;
 
-            // 深色半透明遮罩（蓝紫暗色）
             using (Brush overlay = new SolidBrush(Color.FromArgb(195, 10, 12, 30)))
                 g.FillRectangle(overlay, 0, 0, BdW, BdH);
 
-            // 收集前三名（按排名排序）
             var ranked = new List<(int playerIdx, int rank)>();
             for (int p = 0; p < 4; p++)
                 if (st.Players[p].Rank > 0 && st.Players[p].Rank <= 3)
@@ -1629,20 +1429,16 @@ namespace FlightChess.Client
 
             if (ranked.Count == 0) return;
 
-            // ── 颁奖台布局常数 ──
             float boardCx = BdW / 2f;
-            float podiumBaseY = BdH / 2f + 170;   // 所有台座底部对齐于此（第一名台顶在y=350，分隔线在y=275）
-            float stepW = 170f;                    // 每个台座宽度
-            float gap = 45f;                       // 台座间距
-            float stepH1 = 170f, stepH2 = 140f, stepH3 = 115f;  // 三阶台高
+            float podiumBaseY = BdH / 2f + 170;
+            float stepW = 170f;
+            float gap = 45f;
+            float stepH1 = 170f, stepH2 = 140f, stepH3 = 115f;
 
-            // ── 顶部标题区域 ──
             float titleAreaY = BdH / 2f - 205;
 
-            // 奖杯图标
             DrawTrophyIcon(g, boardCx, titleAreaY + 28, 30f);
 
-            // 主标题
             using (Font titleFont = new Font("微软雅黑", 26f, FontStyle.Bold))
             using (Brush titleBrush = new SolidBrush(Color.FromArgb(250, 255, 225, 80)))
             {
@@ -1652,7 +1448,6 @@ namespace FlightChess.Client
                     boardCx - sz.Width / 2, titleAreaY + 72);
             }
 
-            // 装饰分隔线（金色渐变效果：一条粗线 + 两条细线）
             float sepY = titleAreaY + 130;
             using (Pen sepMain = new Pen(Color.FromArgb(140, 255, 215, 0), 2f))
                 g.DrawLine(sepMain, boardCx - 180, sepY, boardCx + 180, sepY);
@@ -1662,12 +1457,10 @@ namespace FlightChess.Client
                 g.DrawLine(sepThin, boardCx - 200, sepY + 6, boardCx + 200, sepY + 6);
             }
 
-            // ── 台座 X 坐标 ──
-            float x1 = boardCx - stepW / 2;                           // 第一名：中间
-            float x2 = boardCx - stepW * 1.5f - gap;                  // 第二名：左边
-            float x3 = boardCx + stepW * 0.5f + gap;                  // 第三名：右边
+            float x1 = boardCx - stepW / 2;
+            float x2 = boardCx - stepW * 1.5f - gap;
+            float x3 = boardCx + stepW * 0.5f + gap;
 
-            // ── 先画所有台座（从低到高避免遮挡）──
             for (int i = 0; i < ranked.Count && i < 3; i++)
             {
                 var (playerIdx, rank) = ranked[i];
@@ -1681,11 +1474,9 @@ namespace FlightChess.Client
                 float py = podiumBaseY - ph;
                 float cx = px + stepW / 2;
 
-                // 台座阴影
                 using (Brush shadow = new SolidBrush(Color.FromArgb(60, 0, 0, 0)))
                     g.FillRectangle(shadow, px + 4, py + 4, stepW, ph);
 
-                // 台座颜色（带渐变感的双色竖条）
                 Color topColor, bottomColor, borderColor;
                 switch (rank)
                 {
@@ -1706,24 +1497,18 @@ namespace FlightChess.Client
                         break;
                 }
 
-                // 台座主体（顶部一半亮色）
                 using (Brush topBrush = new SolidBrush(topColor))
                     g.FillRectangle(topBrush, px, py, stepW, ph * 0.45f);
-                // 下半部渐深
                 using (Brush botBrush = new SolidBrush(bottomColor))
                     g.FillRectangle(botBrush, px, py + ph * 0.45f, stepW, ph * 0.55f);
-                // 整体覆盖一层柔和过渡
                 using (Brush blend = new SolidBrush(Color.FromArgb(40, topColor)))
                     g.FillRectangle(blend, px, py, stepW, ph);
 
-                // 顶部高光边
                 using (Pen topEdge = new Pen(Color.FromArgb(220, 255, 255, 255), 2.5f))
                     g.DrawLine(topEdge, px + 2, py, px + stepW - 2, py);
-                // 台座边框
                 using (Pen borderPen = new Pen(borderColor, 1.8f))
                     g.DrawRectangle(borderPen, px, py, stepW, ph);
 
-                // 台座侧面竖线（透视感）
                 using (Pen sideLine = new Pen(Color.FromArgb(50, 255, 255, 255), 1f))
                 {
                     g.DrawLine(sideLine, px + 6, py + 1, px + 6, py + ph);
@@ -1731,7 +1516,6 @@ namespace FlightChess.Client
                 }
             }
 
-            // ── 再画每个台座上的内容（奖牌、头像、名字、排名）──
             for (int i = 0; i < ranked.Count && i < 3; i++)
             {
                 var (playerIdx, rank) = ranked[i];
@@ -1742,10 +1526,9 @@ namespace FlightChess.Client
                     case 2: px = x2; ph = stepH2; break;
                     default: px = x3; ph = stepH3; break;
                 }
-                float py = podiumBaseY - ph;       // 台座顶部 Y
-                float cx = px + stepW / 2;          // 台座水平中心
+                float py = podiumBaseY - ph;
+                float cx = px + stepW / 2;
 
-                // ── ① 奖牌（台座正上方悬空）──
                 float medalR = 18f;
                 float medalY = py - medalR - 8;
                 Color medalColor;
@@ -1756,21 +1539,16 @@ namespace FlightChess.Client
                     default: medalColor = Color.FromArgb(210, 145, 60); break;   // 铜
                 }
 
-                // 奖牌光晕
                 using (Brush glow = new SolidBrush(Color.FromArgb(45, medalColor)))
                     g.FillEllipse(glow, cx - medalR - 6, medalY - medalR - 6,
                         (medalR + 6) * 2 + 2, (medalR + 6) * 2 + 2);
-                // 奖牌底色
                 using (Brush medBg = new SolidBrush(medalColor))
                     g.FillEllipse(medBg, cx - medalR, medalY - medalR, medalR * 2, medalR * 2);
-                // 奖牌内环
                 using (Pen medInner = new Pen(Color.FromArgb(160, 255, 255, 255), 2f))
                     g.DrawEllipse(medInner, cx - medalR + 3, medalY - medalR + 3,
                         (medalR - 3) * 2, (medalR - 3) * 2);
-                // 奖牌外环
                 using (Pen medEdge = new Pen(Color.FromArgb(200, 255, 255, 255), 1.8f))
                     g.DrawEllipse(medEdge, cx - medalR, medalY - medalR, medalR * 2, medalR * 2);
-                // 排名数字
                 using (Font medFont = new Font("Arial", 13f, FontStyle.Bold))
                 using (Brush medText = new SolidBrush(Color.White))
                 {
@@ -1780,27 +1558,21 @@ namespace FlightChess.Client
                         cx - msz.Width / 2, medalY - msz.Height / 2 + 1);
                 }
 
-                // ── ② 玩家颜色圆形头像 ──
                 float iconR = 20f;
                 float iconY = py + 42;
-                // 头像阴影
                 using (Brush iconShadow = new SolidBrush(Color.FromArgb(60, 0, 0, 0)))
                     g.FillEllipse(iconShadow, cx - iconR + 1, iconY - iconR + 1, iconR * 2, iconR * 2);
-                // 头像主体
                 using (Brush iconBg = new SolidBrush(PlyCol[playerIdx]))
                     g.FillEllipse(iconBg, cx - iconR, iconY - iconR, iconR * 2, iconR * 2);
-                // 头像白色边框
                 using (Pen iconEdge = new Pen(Color.White, 2.5f))
                     g.DrawEllipse(iconEdge, cx - iconR, iconY - iconR, iconR * 2, iconR * 2);
 
-                // ── ③ 玩家名称 ──
                 string playerName = st.Players[playerIdx].Name;
                 float nameY = iconY + iconR + 10;
                 using (Font nameFont = new Font("微软雅黑", 12f, FontStyle.Bold))
                 using (Brush nameBrush = new SolidBrush(Color.FromArgb(245, 240, 240, 240)))
                 {
                     var nsz = g.MeasureString(playerName, nameFont);
-                    // 如果名字过长，用更小字体
                     Font actualFont = nameFont;
                     if (nsz.Width > stepW - 16)
                     {
@@ -1812,7 +1584,6 @@ namespace FlightChess.Client
                     if (actualFont != nameFont) actualFont.Dispose();
                 }
 
-                // ── ④ 排名标签（台座底部，带半透明底条）──
                 string rankLabel;
                 Color rankLabelColor;
                 switch (rank)
@@ -1822,7 +1593,6 @@ namespace FlightChess.Client
                     default: rankLabel = "★ 第 三 名"; rankLabelColor = Color.FromArgb(240, 215, 165, 100); break;
                 }
                 float rankY = py + ph - 30;
-                // 排名底条
                 using (Brush rankBg = new SolidBrush(Color.FromArgb(70, 0, 0, 0)))
                     g.FillRectangle(rankBg, px + 8, rankY - 2, stepW - 16, 24);
                 using (Font rankFont = new Font("微软雅黑", 13f, FontStyle.Bold))
@@ -1834,7 +1604,6 @@ namespace FlightChess.Client
                 }
             }
 
-            // ── 底部提示 ──
             float hintY = podiumBaseY + 30;
             using (Font hintFont = new Font("微软雅黑", 10f, FontStyle.Regular))
             using (Brush hintBrush = new SolidBrush(Color.FromArgb(190, 185, 185, 195)))
@@ -1845,20 +1614,16 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>绘制奖杯图标（加大版，金色倒梯形杯身 + 弧形杯耳 + 底座）</summary>
         private void DrawTrophyIcon(Graphics g, float cx, float cy, float r)
         {
-            // 杯身（倒梯形）
             PointF[] cup = {
                 new PointF(cx - r * 0.45f, cy - r),
                 new PointF(cx + r * 0.45f, cy - r),
                 new PointF(cx + r * 0.75f, cy + r * 0.35f),
                 new PointF(cx - r * 0.75f, cy + r * 0.35f)
             };
-            // 杯身填充（金色渐变：上亮下暗）
             using (Brush cupFill = new SolidBrush(Color.FromArgb(250, 255, 225, 50)))
                 g.FillPolygon(cupFill, cup);
-            // 杯身高光（上半部分更亮）
             using (Brush cupHighlight = new SolidBrush(Color.FromArgb(120, 255, 245, 150)))
                 g.FillPolygon(cupHighlight, new PointF[] {
                     new PointF(cx - r * 0.38f, cy - r),
@@ -1866,31 +1631,25 @@ namespace FlightChess.Client
                     new PointF(cx + r * 0.65f, cy + r * 0.05f),
                     new PointF(cx - r * 0.65f, cy + r * 0.05f)
                 });
-            // 杯身边框
             using (Pen cupEdge = new Pen(Color.FromArgb(220, 200, 160, 20), 2.2f))
                 g.DrawPolygon(cupEdge, cup);
 
-            // 杯耳（左右弧形，稍粗）
             using (Pen earPen = new Pen(Color.FromArgb(245, 255, 220, 30), 3.5f))
             {
                 g.DrawArc(earPen, cx - r * 0.95f, cy - r * 0.55f, r * 0.65f, r * 1.05f, 270, 120);
                 g.DrawArc(earPen, cx + r * 0.30f, cy - r * 0.55f, r * 0.65f, r * 1.05f, 150, 120);
             }
 
-            // 底座
             using (Brush baseFill = new SolidBrush(Color.FromArgb(235, 210, 160, 25)))
                 g.FillRectangle(baseFill, cx - r * 0.72f, cy + r * 0.35f, r * 1.44f, r * 0.28f);
             using (Pen baseEdge = new Pen(Color.FromArgb(200, 190, 140, 15), 1.5f))
                 g.DrawRectangle(baseEdge, cx - r * 0.72f, cy + r * 0.35f, r * 1.44f, r * 0.28f);
 
-            // 杯顶横条
             using (Pen topBar = new Pen(Color.FromArgb(230, 255, 225, 60), 2.5f))
                 g.DrawLine(topBar, cx - r * 0.55f, cy - r, cx + r * 0.55f, cy - r);
         }
 
-        // =================================================================
-        //  网络通信（维持原有逻辑不变）
-        // =================================================================
+        // 网络通信
         private void ConnectToServer(string addr, int port)
         {
             try
@@ -1933,7 +1692,7 @@ namespace FlightChess.Client
                     string l = _reader.ReadLine();
                     if (l == null) break;
                     if (string.IsNullOrWhiteSpace(l)) continue;
-                    _lastServerMsgTime = DateTime.UtcNow; // 更新收到消息的时间
+                    _lastServerMsgTime = DateTime.UtcNow;
                     ProcessMsg(l);
                 }
             }
@@ -1954,19 +1713,16 @@ namespace FlightChess.Client
                 var o = JObject.Parse(json);
                 var t = o["Type"]?.Value<string>();
 
-                // Pong 消息无需 UI 操作，直接忽略
                 if (t == MessageType.Pong)
                     return;
 
-                // Ping 消息直接回复，不经过 UI 线程（避免阻塞接收线程）
                 if (t == MessageType.Ping)
                 {
                     SendMessage(new PongMessage());
                     return;
                 }
 
-                // 使用 BeginInvoke 而非 Invoke：不阻塞接收线程，
-                // 防止 UI 繁忙时 TCP 接收缓冲区填满 → 服务端发送阻塞 → 连锁延迟
+                // 用 BeginInvoke 避免阻塞接收线程
                 this.BeginInvoke(new Action(() =>
                 {
                     try
@@ -1989,7 +1745,6 @@ namespace FlightChess.Client
             catch (JsonException) { }
             catch (InvalidOperationException)
             {
-                // 不应发生：构造函数已确保 Handle 创建。若到达此处说明存在异常路径。
                 System.Diagnostics.Debug.Fail("ProcessMsg: BeginInvoke失败, Handle未创建");
             }
             catch (Exception ex)
@@ -2008,7 +1763,6 @@ namespace FlightChess.Client
                     oldState = _currentGameState.DeepCopy();
                 _currentGameState = m.State;
             }
-            // 检测棋子移动并触发步进动画（异常不影响 UI 状态更新）
             if (oldState != null)
             {
                 try { DetectAndAnimate(oldState, m.State); }
@@ -2034,7 +1788,7 @@ namespace FlightChess.Client
         private void HandlePL(string json)
         {
             var m = JsonConvert.DeserializeObject<PlayerLeftMessage>(json);
-            string msg = string.Format("【{0}】掉线了（30秒内可重连）。", m.PlayerName);
+            string msg = string.Format("【{0}】掉线了（可随时重连）。", m.PlayerName);
             Log(msg);
         }
 
@@ -2057,12 +1811,10 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>在聊天 RichTextBox 末尾追加一行并自动滚动到底部</summary>
         private void AppendChatLine(string line)
         {
             if (rtbChat.IsDisposed) return;
 
-            // 限制聊天记录条数（保留最近 200 行）
             if (rtbChat.Lines.Length > 200)
             {
                 rtbChat.Select(0, rtbChat.GetFirstCharIndexFromLine(rtbChat.Lines.Length - 200));
@@ -2070,12 +1822,10 @@ namespace FlightChess.Client
             }
 
             rtbChat.AppendText(line + Environment.NewLine);
-            // 自动滚动到底部
             rtbChat.SelectionStart = rtbChat.TextLength;
             rtbChat.ScrollToCaret();
         }
 
-        /// <summary>发送聊天消息到服务器</summary>
         private void SendChatMessage(string content)
         {
             if (!_isConnected)
@@ -2092,10 +1842,8 @@ namespace FlightChess.Client
             });
         }
 
-        /// <summary>初始化聊天面板的快捷短语按钮</summary>
         private void InitChatPanel()
         {
-            // 快捷短语列表
             string[] phrases = new string[]
             {
                 "加油！💪",
@@ -2128,7 +1876,6 @@ namespace FlightChess.Client
                 {
                     SendChatMessage(phrase);
                 };
-                // 悬停效果
                 btn.MouseEnter += (sender, e) =>
                 {
                     btn.BackColor = System.Drawing.Color.FromArgb(220, 240, 255);
@@ -2142,10 +1889,7 @@ namespace FlightChess.Client
             }
         }
 
-        /// <summary>
-        /// 心跳检测：如果超过 18 秒未收到服务器任何消息，认为连接断开并启动重连
-        /// （放宽到 18 秒 = 容忍 3 次心跳探测未回复，避免 UI 繁忙时误判）
-        /// </summary>
+        /// <summary>心跳检测：18 秒无消息则认为断线并启动重连。</summary>
         private void HeartbeatCheckTimer_Tick(object sender, EventArgs e)
         {
             if (!_isConnected || _isReconnecting) return;
@@ -2167,7 +1911,6 @@ namespace FlightChess.Client
 
             if (_myPlayerId >= 0 && !_isReconnecting)
             {
-                // 已加入游戏 → 尝试重连
                 Log("连接断开，开始后台重连...");
                 StartReconnection();
             }
@@ -2177,7 +1920,6 @@ namespace FlightChess.Client
                 {
                     if (_myPlayerId < 0)
                     {
-                        // 从未成功加入（被服务器拒绝或连接失败），不是断线重连
                         Log("无法加入游戏。");
                         lblCurrentPlayer.Text = "连接失败";
                     }
@@ -2192,17 +1934,11 @@ namespace FlightChess.Client
             }
         }
 
-        // =================================================================
-        //  断线重连逻辑
-        // =================================================================
+        // 断线重连
 
-        /// <summary>
-        /// 应用重连结果：替换连接对象、关闭旧连接、启动新接收线程
-        /// </summary>
         private void ApplyReconnectResult(TcpClient newClient, NetworkStream newStream,
             StreamReader newReader, StreamWriter newWriter)
         {
-            // 替换连接对象
             var oldClient = _tcpClient;
             var oldStream = _stream;
             var oldReader = _reader;
@@ -2216,13 +1952,11 @@ namespace FlightChess.Client
             _isReconnecting = false;
             _lastServerMsgTime = DateTime.UtcNow;
 
-            // 关闭旧连接
             try { oldWriter?.Dispose(); } catch { }
             try { oldReader?.Dispose(); } catch { }
             try { oldStream?.Close(); } catch { }
             try { oldClient?.Close(); } catch { }
 
-            // 启动新的接收线程
             _receiveThread = new Thread(ReceiveLoop) { IsBackground = true };
             _receiveThread.Start();
         }
@@ -2235,13 +1969,11 @@ namespace FlightChess.Client
             _reconnectThread.Start();
         }
 
-        /// <summary>后台重连循环：每 2 秒尝试一次，最多尝试 MAX_RECONNECT_ATTEMPTS 次</summary>
         private void ReconnectionLoop()
         {
             while (_reconnectAttempts < MAX_RECONNECT_ATTEMPTS && _isReconnecting)
             {
                 Thread.Sleep(2000);
-                // 每次 Sleep 后重新检查，防止窗体关闭时继续重连
                 if (!_isReconnecting) return;
                 _reconnectAttempts++;
 
@@ -2261,7 +1993,6 @@ namespace FlightChess.Client
                     newReader = new StreamReader(newStream, Encoding.UTF8);
                     newWriter = new StreamWriter(newStream, Encoding.UTF8) { AutoFlush = true };
 
-                    // 先尝试 ReconnectMessage（进程内重连）
                     string reconnectJson = JsonConvert.SerializeObject(new ReconnectMessage
                     {
                         PlayerId = _myPlayerId,
@@ -2269,8 +2000,6 @@ namespace FlightChess.Client
                     });
                     newWriter.WriteLine(reconnectJson);
 
-                    // ★ 循环读取，直到收到 JoinGameResponse 或 Error
-                    // 服务器可能在 JoinGameResponse 之前发送 GameStateUpdate / Ping 等消息
                     bool reconnected = false;
                     bool shouldFallback = false;
                     DateTime readStart = DateTime.UtcNow;
@@ -2286,7 +2015,6 @@ namespace FlightChess.Client
 
                         if (msgType == MessageType.JoinGameResponse)
                         {
-                            // === Reconnect 成功 ===
                             ApplyReconnectResult(newClient, newStream, newReader, newWriter);
                             this.BeginInvoke(new Action(() =>
                             {
@@ -2298,7 +2026,6 @@ namespace FlightChess.Client
                         }
                         else if (msgType == MessageType.Error)
                         {
-                            // Reconnect 被拒 → 降级为 JoinGame
                             LogInvoke("重连被拒（{0}），尝试以新身份加入...",
                                 obj["Message"]?.Value<string>() ?? "未知原因");
                             shouldFallback = true;
@@ -2306,21 +2033,13 @@ namespace FlightChess.Client
                         }
                         else if (msgType == MessageType.Ping)
                         {
-                            // 回复 Pong
                             newWriter.WriteLine(JsonConvert.SerializeObject(new PongMessage()));
                         }
-                        else if (msgType == MessageType.GameStateUpdate)
-                        {
-                            // 中间状态更新：暂存，待重连成功后处理
-                            // （重连成功后服务器会重新广播完整状态，此处可忽略）
-                        }
-                        // 其他消息（Chat、PlayerLeft 等）忽略
                     }
 
                     if (reconnected)
                         return;
 
-                    // === 降级为 JoinGame ===
                     if (shouldFallback)
                     {
                         newWriter.WriteLine(JsonConvert.SerializeObject(
@@ -2338,7 +2057,6 @@ namespace FlightChess.Client
 
                             if (msgType == MessageType.JoinGameResponse)
                             {
-                                // === JoinGame 成功（回到原位或新位） ===
                                 ApplyReconnectResult(newClient, newStream, newReader, newWriter);
                                 this.BeginInvoke(new Action(() =>
                                 {
@@ -2360,7 +2078,6 @@ namespace FlightChess.Client
                         }
                     }
 
-                    // 本次尝试失败，清理临时连接
                     try { newWriter?.Dispose(); } catch { }
                     try { newReader?.Dispose(); } catch { }
                     try { newStream?.Close(); } catch { }
@@ -2368,7 +2085,6 @@ namespace FlightChess.Client
                 }
                 catch (ObjectDisposedException)
                 {
-                    // 连接对象已被释放（窗体关闭），停止重连
                     _isReconnecting = false;
                     return;
                 }
@@ -2383,7 +2099,6 @@ namespace FlightChess.Client
                 }
             }
 
-            // 所有重试耗尽
             _isReconnecting = false;
             this.BeginInvoke(new Action(() =>
             {
@@ -2394,14 +2109,11 @@ namespace FlightChess.Client
             }));
         }
 
-        // =================================================================
-        //  UI 更新
-        // =================================================================
+        // UI 更新
         private void UpdateUI(GameState st)
         {
             if (st.GameOver)
             {
-                // 显示第一名
                 string firstPlace = "";
                 for (int i = 0; i < 4; i++)
                     if (st.Players[i].Rank == 1) { firstPlace = FlightChessEngine.PlayerColorNames[i]; break; }
@@ -2409,11 +2121,7 @@ namespace FlightChess.Client
                 lblCurrentPlayer.ForeColor = Color.FromArgb(255, 215, 0);
                 btnRollDice.Enabled = false;
                 btnRollDice.Text = "游戏结束";
-                btnReset.Text = "新游戏";
-                btnReset.Enabled = true;
-                btnReset.BackColor = Color.FromArgb(180, 255, 180);
 
-                // 烟花特效（仅触发一次）
                 if (!_victoryShown)
                 {
                     _victoryShown = true;
@@ -2455,15 +2163,11 @@ namespace FlightChess.Client
                     btnRollDice.Text = "点击棋子";
                     btnRollDice.BackColor = Color.FromArgb(255, 255, 200);
                 }
-                btnReset.Enabled = true;
-                btnReset.Text = "重置";
             }
             else if (!st.GameOver)
             {
                 btnRollDice.Enabled = false;
                 btnRollDice.Text = "等待他人...";
-                btnReset.Enabled = true;
-                btnReset.Text = "重置";
             }
 
             if (st.LogMessages != null)
@@ -2482,39 +2186,16 @@ namespace FlightChess.Client
             SendMessage(new RollDiceMessage());
         }
 
-        private void BtnReset_Click(object s, EventArgs e)
-        {
-            GameState st;
-            lock (_stateLock) { st = _currentGameState; }
-            if (st != null && st.GameOver)
-            {
-                // 游戏结束：发送重新开始请求
-                SendMessage(new ResetGameMessage());
-                Log("请求重新开始游戏...");
-            }
-            else
-            {
-                if (MessageBox.Show("重置需重启客户端。", "确认",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-                {
-                    HandleDisconnect();
-                    MessageBox.Show("请重启客户端。");
-                }
-            }
-        }
-
         private void MainForm_FormClosing(object s, FormClosingEventArgs e)
         {
-            _isReconnecting = false; // 停止重连循环
+            _isReconnecting = false;
             _isConnected = false;
             _heartbeatCheckTimer?.Stop();
             try { _stream?.Close(); } catch { }
             try { _tcpClient?.Close(); } catch { }
         }
 
-        // =================================================================
-        //  日志
-        // =================================================================
+        // 日志
         public void Log(string fmt, params object[] args)
         {
             string m = string.Format("[{0:HH:mm:ss}] {1}", DateTime.Now, string.Format(fmt, args));
